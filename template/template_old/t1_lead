@@ -1,0 +1,133 @@
+% ----------------------
+
+set title "MSR simplified"
+surf 1  cylz  0 0  210  -250 250
+surf 2  cylz  0 0  211  -251  251
+surf 3  cylz  0 0  280  -251 251
+surf 4  cylz  0 0  280  251 351
+surf 5  cylz  0 0  280   -351  -251
+
+%--- cell definition
+cell  1  0  fuel    -1    
+cell  2  0  clad    1 -2
+cell  3  0  ReflecFuel  2 -3
+cell 4   0   reflec  -4
+cell 5   0  reflec  -5
+cell 6   0   outside 3 4 5
+
+
+%tmp 968 
+%---def of materials, fuel enrichment of 12.5%
+ mat fuel   -3.17   tmp 973   vol   69.272118e6
+92235.09c	0.015787404
+92238.09c	0.109118822
+11023.09c	0.250187547
+17037.09c	0.618303848
+17035.09c	0.006602379
+
+
+
+
+%reflector fuel
+mat ReflecFuel  -9.4  tmp 900   vol 53.43E6
+82204.09c	-0.012870321
+82206.09c	-0.221553388
+82207.09c	-0.203167215
+82208.09c	-0.481717739
+92235.09c	-0.002324996
+92238.09c	-0.016274974
+11023.09c	-0.003606095
+17037.09c	-0.014336639
+17035.09c	-0.000144815
+28000.09c	-0.026402290
+24000.09c	-0.009240802
+42000.09c	-0.003960344
+26000.09c	-0.002200191
+41093.09c	-0.001760153
+25055.09c	-0.000176015
+13027.09c	-0.000132011
+22000.09c	-0.000132011
+
+
+
+
+mat reflec  -10.2 tmp 900  vol 49.26E6
+82204.09c	-1.40
+82206.09c	-24.1
+82207.09c	-22.1
+82208.09c	-52.4
+
+
+
+%clad
+mat clad  -8.3  tmp 973    vol 0.94103e6
+28000.09c  -60
+24000.09c  -21
+42000.09c   -9
+26000.09c   -5
+41093.09c   -4
+25055.09c   -0.4
+13027.09c   -0.3
+22000.09c   -0.3
+% 129600
+
+
+%---def of materials, stock arricchito al 15%
+mat U_stock   -3.46    tmp 900    vol    69272118
+92235.09c	0.018735934
+92238.09c	0.106170293
+11023.09c	   0.250187546886722
+17037.09c	   0.618303848
+17035.09c    0.006602379
+
+
+
+ 
+%%tanks for offgases
+mat offgastankcore 0.0007  tmp 900 burn 1 vol  1000
+2004.09c 1
+
+% overflow tank
+mat overflow 0.0007 tmp 900 burn 1 vol 1
+2004.09c 1
+ 
+ % --- Cross section data library file path:
+
+% Libraries for cross sections
+set acelib "/global/home/groups/co_nuclear/serpent/xsdata/endfb7/sss_endfb7u.xsdata" 
+
+%Libraries for decay data
+set declib "/global/home/groups/co_nuclear/serpent/xsdata/endfb7/sss_endfb7.dec"
+
+%Libraries for neutron induced fission yield library
+set nfylib "/global/home/groups/co_nuclear/serpent/xsdata/endfb7/sss_endfb7.nfy"
+
+% --- Reflective boundary condition:
+
+set bc 1
+set pcc 2
+% universe = 0 (homogenization over all space)
+% symmetry = 4
+% 4-group structure (3 group boundaries)
+
+set gcu -1
+
+% set nfg  4  0.625E-6  5.5E-3  0.821
+% --- Neutron population and criticality cycles:
+
+
+set pop 10000 150   20
+set nbuf 2000
+
+% --- Geometry and mesh plots:
+
+%plot 3 500 500
+%mesh 3 500 500
+%plot 1 500 500
+% --- Total power for normalization:
+
+set power 600E6   fuel
+
+
+
+

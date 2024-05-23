@@ -1,0 +1,17 @@
+#!/bin/sh
+#################### CONFIGURATION ####################
+#SBATCH --job-name=serpent_run # name that will appear on queue in the cluster you can change it, it will just show when you're doing "squeue -A co_nuclear"
+#SBATCH --output=Name.o # name of the file where tphe output message will beprinted, very important to check what is happening
+#SBATCH --error=Name.error # name of the file where error messages will beprinted when an error occurs
+#SBATCH --time=Replacetime # maximum allowed time for the job to run (I wouldn't touch, except you're affraid that it will run for too long)
+#SBATCH --nodes=REPLACEn # Number of nodes to use (will set the $SLURM_JOB_NUM_NODES variable) --> TO CHANGE IF USING SEVERALNODES (not too many please)
+#SBATCH --cpus-per-task=ReplaceCPU # Number of CPUs on each node used to run the task and should be the number o f a v a i l a b l e C P U s ( w i l l s e t t h e$SLURM_CPUS_PER_TASK variable, do not change)
+#SBATCH --ntasks-per-node=1 # Runs one Serpent task on each node (do notchange)
+#################### ACCOUNT ####################
+#SBATCH --qos=savio_lowprio # Do not change if using co_nuclear
+#SBATCH -A co_nuclear # Do not change if using co_nuclear
+#SBATCH --partition=REPLACEPART # Do not change if using co_nuclear
+export SERPENT_EXE="/global/home/groups/co_nuclear/HxF_tools/serpent2.2.0_HxF_dev/sss2"
+
+#################### COMMAND ####################
+REPLACESERPENT #sss2 -omp $SLURM_CPUS_PER_TASK PATH 

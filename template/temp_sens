@@ -1,0 +1,49 @@
+
+Replacefilerestart %set rfr continue restartfile
+
+% %%%
+% %%% --- Sensitivity options
+% %%%
+
+% --- Run sensitivity calculation using Vitamin-J energy grid
+
+sens opt egrid ANL33
+
+% --- Use 15 latent generations for the sensitivity calculations
+
+sens opt latgen 15
+
+% --- Use 10 generations for Iterated Fission Probability
+
+set ifp 10
+
+% %%%
+% %%% --- Sensitivity responses
+% %%%
+
+% --- Calculate sensitivity of k-effective to perturbations
+
+sens resp Replaceresp %keff 
+
+% %%%
+% %%% --- Sensitivity perturbations
+% %%%
+
+% --- Separate perturbations for the different nuclides and total
+
+sens pert zailist Replacezailist %all
+
+% --- Do not calculate material-wise perturbations (only total)
+
+sens pert matlist total
+
+% --- Perturb cross sections separately for each sum reaction mode (fission, capture etc.)
+
+sens pert xs Replacemtlist %all % mtlist 102 103 18 %sens pert xs mtlist 102 103
+
+% --- Score sensitivity results directly to a matrix for each particle
+%     Assume 0.2 matrices needed per generation per particle
+
+sens opt direct 0.2
+
+ReplaceBU

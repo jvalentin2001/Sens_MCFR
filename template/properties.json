@@ -1,0 +1,57 @@
+{"mat_prop":{   "_comment":"composition of cladding, and reflector with: Zai, atomic percentage, the density in g/cc, temperature of the system in K, volume salt in cm^3, template name, the reference mflow out is for noble gas removal for a gas removal time constant of 30min",
+    "MCFR_C_old": {
+      "mat_clad": [28000,24000,42000,26000,41093,25055,13027,22000],
+      "M_clad":[58.7,52.0,95.95,55.85,93,55,27,47.87],
+      "mat_refl": [82204,82206,82207,82208],
+      "n_clad": [0.6,0.21,0.09,0.05,0.04,0.004,0.003,0.003],
+      "n_refl":  [0.014,0.241,0.221, 0.524],
+      "rho_clad": 8.3,
+      "rho_refl": 10.2,
+      "initial_enrich_U":0.125,
+      "U_cl_split":0.333,
+      "temp":973.15,
+      "vol_salt": 69.272118e6,
+      "template": "template_lead",
+      "ref_mflow_in": 2.55e-10,
+      "ref_mflow_out": 2.467e-10
+    },
+    "MCFR_C": {
+      "mat_clad": [28058,28060,24052,42092,42094,42095,42096,42097,42098,42100,26056,41093,25055,13027,22000],
+      "M_clad":[58,60,52.0,92,94,95,96,97,98,100,56,93,55,27,47.87],
+      "mat_refl": [82204,82206,82207,82208],
+      "n_clad": [0.434,0.166,0.21,0.09,0.00742,0.00476,0.00796,0.00834,0.004775,0.012065,0.004815,0.04,0.004,0.003,0.003],
+      "n_refl":  [0.014,0.241,0.221, 0.524],
+      "rho_clad": 8.3,
+      "rho_refl": 10.2,
+      "initial_enrich_U":0.125,
+      "U_cl_split":0.333,
+      "temp":973.15,
+      "vol_salt": 69.272118e6,
+      "template": "template_lead",
+      "ref_mflow_in": 2.55e-10,
+      "ref_mflow_out": 2.467e-10
+    },
+    "MCFR_D": {
+      "mat_clad": [28058,28060,24052,42092,42094,42095,42096,42097,42098,42100,26056,41093,25055,13027,22000],
+      "M_clad":[58,60,52.0,92,94,95,96,97,98,100,56,93,55,27,47.87],
+      "mat_refl": [12024,12025,12026,8016],
+      "n_clad": [0.434,0.166,0.21,0.09,0.00742,0.00476,0.00796,0.00834,0.004775,0.012065,0.004815,0.04,0.004,0.003,0.003],
+      "n_refl":  [0.395,0.05,0.065, 0.5],
+      "rho_clad": 8.3,
+      "rho_refl": 3.6,
+      "initial_enrich_U":0.1975,
+      "U_cl_split":0.333,
+      "temp":968.15,
+      "vol_salt": 9.9235e6,
+      "template": "template_mgo",
+      "ref_mflow_in": 2.55e-10,
+      "ref_mflow_out": 2.381e-10
+    }
+  },
+  "general_prop":{
+    
+  }
+
+
+}
+  

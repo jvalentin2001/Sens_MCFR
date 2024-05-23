@@ -1,0 +1,186 @@
+% ----------------------
+
+set title "MSR simplified"
+surf 1  cylz  0 0  210  -250 250
+surf 2  cylz  0 0  211  -251  251
+surf 3  cylz  0 0  280  -251 251
+surf 4  cylz  0 0  280  251 351
+surf 5  cylz  0 0  280   -351  -251
+
+%--- cell definition
+cell  1  0  fuel    -1    
+cell  2  0  clad    1 -2
+cell  3  0  ReflecFuel  2 -3
+cell 4   0   reflec  -4
+cell 5   0  reflec  -5
+cell 6   0   outside 3 4 5
+
+
+%tmp 968 
+%---def of materials, fuel arricchito al 12.5%
+ mat fuel   -3.17   tmp 973 burn 1  vol   69272118
+
+92235.09c	0.015787404
+92238.09c	0.109118822
+11023.09c	0.250187546886722
+17037.09c	0.618303848
+17035.09c   0.006602379
+
+
+
+
+%riflettore
+mat ReflecFuel  -9.58  tmp 973   vol 53.8E6
+82204.09c	-0.0134048544991283
+82206.09c	-0.230754995306423
+82207.09c	-0.211605203164812
+82208.09c	-0.501724554110232
+92235.09c	-0.00269400897269296
+92238.09c	-0.0188580628088507
+11023.09c	-0.00417843812042539
+17037.09c	-0.0166120841872612
+17035.09c	-0.000167798830174355
+
+
+mat reflec  -10.2 tmp 973 burn 1  vol 49.23E6
+82204.09c	-1.40
+82206.09c	-24.1
+82207.09c	-22.1
+82208.09c	-52.4
+
+
+
+%clad
+mat clad  -8.3  tmp 973    vol 3764155.787
+28000.09c  -60
+24000.09c  -21
+42000.09c   -9
+26000.09c   -5
+41093.09c   -4
+25055.09c   -0.4
+13027.09c   -0.3
+22000.09c   -0.3
+% 129600
+
+
+%---def of materials, stock enriched to 19.75%
+mat U_stock   -3.17   tmp 973  burn 1  vol    69272118
+92235.09c	0.02492107
+92238.09c	0.099985157
+11023.09c	   0.250187546886722
+17037.09c	   0.618303848
+17035.09c    0.006602379
+
+
+
+ 
+%%tanks for offgases
+mat offgastankcore 0.0007  tmp 973 burn 1 vol  1000
+2004.09c 1
+
+% overflow tank
+mat overflow 0.0007 tmp 973 burn 1 vol 1
+2004.09c 1
+ 
+ % --- Cross section data library file path:
+
+% Libraries for cross sections
+set acelib "/global/home/groups/co_nuclear/serpent/xsdata/endfb7/sss_endfb7u.xsdata"
+
+%Libraries for decay data
+set declib "/global/home/groups/co_nuclear/serpent/xsdata/endfb7/sss_endfb7.dec"
+
+%Libraries for neutron induced fission yield library
+set nfylib "/global/home/groups/co_nuclear/serpent/xsdata/endfb7/sss_endfb7.nfy"
+
+% --- Reflective boundary condition:
+
+set bc 1
+set pcc 2
+% universe = 0 (homogenization over all space)
+% symmetry = 4
+% 4-group structure (3 group boundaries)
+
+set gcu -1
+
+% set nfg  4  0.625E-6  5.5E-3  0.821
+% --- Neutron population and criticality cycles:
+
+
+set pop 1000 150   20
+set nbuf 2000
+
+% --- Geometry and mesh plots:
+
+%plot 3 500 500
+%mesh 3 500 500
+%plot 1 500 500
+% --- Total power for normalization:
+
+set power 600E6   fuel
+
+
+
+
+
+set inventory
+all
+
+
+ %dep daystep 0.1 0.5 1 2 3 4 5 8 10 12 16 20 24 28 32 40 48 56 64 72 82 90 100 
+%2 3 4 5 8 10 12 16 20 24 28 32 40 50 100 150 200
+mflow U_in   all  2.55E-10 % all the isotopes have the same reprocessing frequency
+
+
+
+
+
+ mflow offgasratecore
+ Ne 4.063E-3
+ Ar 4.063E-3
+ He 4.063E-3
+ Kr 4.063E-3
+ Xe 4.063E-3
+ Rn 4.063E-3
+ Se 4.063E-3
+ Nb 4.063E-35
+ Mo 4.063E-35
+
+
+
+% need to account for the increase in volume with refueling
+mflow over
+all 2.45E-10
+
+
+
+
+rep source_rep
+rc U_stock fuel U_in 0 %rc mode with SRC_mat target mflowname mode, where mode 0 is infinite source, and mode 1 is the source diminishes
+rc fuel offgastankcore offgasratecore 1
+rc fuel overflow over 1
+
+dep
+pro source_rep %the depletion is linked to the rep card above (i.e. the time evolution in depletion is used for the reprocessing)
+daystep %interval in days
+ 100 100 100 100 100 100 100 100   200 200 200 200 200 200 200 200 300 
+400 300 300 300 400 400 400 400 400 400 400 400 400 400 400 400 400 400 
+400 400 400 400 400 400 400 400 400 400 400 400 400 400 400 400 400 400 
+400 400 400 400 400 400 400 400 400 400 400 400 400 700 700 700 700 700 
+700 700 700 700 700 700 700 700 700 700 700 700 700 700 700 1000 1000 
+1000 1000 
+1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000  1000 1000 
+1000 1000 1000 1000 1000  2000 2000 2000 2000 2000 2000  2000 2000 2000 
+2000 2000 2000 2000 2000 2000  2000 2000 2000 2000 2000 2000 2000 2000 
+2000 2000 2000  2000 2000 2000 2000 2000 2000 2000  2000 2000 2000 2000   
+2000 2000 2000 2000 2000 2000 2000  2000 2000 2000 2000 2000 2000 2000 
+2000 2000 2000 2000 2000 2000 2000 2000 2000 2000  2000 2000 
+2000 2000 2000 2000 2000  2000 2000 2000 2000   2000 2000 2000 2000 2000 2000 2000 
+ 2000 2000 2000 2000  2000 2000 2000 2000  2000 2000 2000 2000 2000 2000 2000 2000 
+  2000 2000 2000 2000 2000 2000 2000 2000  2000 2000 2000 2000
+    2000 2000 2000 2000 2000 2000 2000 2000  2000 2000 2000 2000
+
+ 
+
+ % Print Material Compositions
+%set printm 1

@@ -1,0 +1,109 @@
+% ----------------------
+
+set title "MSR simplified"
+surf 1  cylz  0 0  95  -175 175
+surf 2  cylz  0 0  96  -176  176
+surf 3  cylz  0 0  185  -176 176
+surf 4  cylz  0 0  185  176 266
+surf 5  cylz  0 0  185   -266  -176
+
+%--- cell definition
+cell  1  0  fuel    -1    
+cell  2  0  clad    1 -2
+cell  3  0  reflec  2 -3
+cell 4   0   reflec  -4
+cell 5   0  reflec  -5
+cell 6   0   outside 3 4 5
+
+
+%tmp 968 
+%---def of materials, fuel enrichment of 12.5%
+ mat fuel   Replacef.1   tmp Replacef.2 burn 1 vol   Replacevol
+Replacef.3
+
+
+
+
+%reflector fuel
+mat ReflecFuel  Replacerf.1  tmp Replacerf.2    
+Replacerf.3
+
+
+
+
+mat reflec  Replacer.1 tmp Replacer.2 burn 1  vol 47.00975e6
+Replacer.3
+
+
+
+%clad
+mat clad  Replacec.1  tmp Replacec.2    vol 0.26792e6
+Replacec.3
+% 129600
+
+
+%---def of materials, stock arricchito al 19.75%
+mat U_stock   Replaces.1    tmp Replaces.2 burn 1 vol    Replacevol
+Replaces.3
+
+
+
+ 
+%%tanks for offgases
+mat offgastankcore 0.0007  tmp ReplaceT burn 1 vol  1000
+2004Replacelib 1
+
+% overflow tank
+mat overflow 0.0007 tmp ReplaceT burn 1 vol 1
+2004Replacelib 1
+ 
+ % --- Cross section data library file path:
+
+% Libraries for cross sections
+set acelib Replacepath
+
+%Libraries for decay data
+set declib "/global/home/groups/co_nuclear/serpent/xsdata/endf8/endf8.dec"
+
+%Libraries for neutron induced fission yield library
+set nfylib "/global/home/groups/co_nuclear/serpent/xsdata/endf8/endf8.nfy"
+
+% --- Reflective boundary condition:
+
+set bc 1
+set pcc 0
+% universe = 0 (homogenization over all space)
+% symmetry = 4
+% 4-group structure (3 group boundaries)
+
+set gcu -1
+
+% set nfg  4  0.625E-6  5.5E-3  0.821
+% --- Neutron population and criticality cycles:
+
+
+set pop Replacepop
+set nbuf 2000
+
+% --- Geometry and mesh plots:
+
+%plot 3 500 500
+%mesh 3 500 500
+%plot 1 500 500
+% --- Total power for normalization:
+
+set power 180E6   fuel
+
+ene ANL33 1 1e-11 4.17458120e-07 5.31578507e-07 3.92786341e-06 8.31528691e-06
+ 1.37095904e-05 2.26032933e-05 3.72665304e-05 6.14421214e-05
+ 1.01300933e-04 1.67017002e-04 2.75364484e-04 4.53999282e-04
+ 7.48518273e-04 1.23409800e-03 2.03468362e-03 3.35462616e-03
+ 5.53084351e-03 9.11881934e-03 1.50343914e-02 2.47875209e-02
+ 4.08677130e-02 6.73794677e-02 1.11089962e-01 1.83156383e-01
+ 3.01973824e-01 4.97870667e-01 8.20849958e-01 1.35335279e+00
+ 2.23130153e+00 3.67879429e+00 6.06530639e+00 9.99999966e+00
+ 1.41906750e+01
+
+
+Replaceflux %det flux n dm fuel de ANL33 dv 69.272118e6
+
