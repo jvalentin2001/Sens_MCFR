@@ -7,6 +7,11 @@ from matplotlib.colors import Normalize, LogNorm
 from matplotlib import colors
 import csv
 from utils import *
+import matplotlib.colors as cl
+from matplotlib.ticker import FixedLocator
+import copy,distinctipy
+from itertools import cycle
+from uncertainties import unumpy as unp
 
 
 
@@ -26,9 +31,10 @@ class MCFR():
             prefix (str, optional): name prefix for folder generation. Defaults to ""
         """
         with open('template/properties.json', 'r') as file:
-            data = json.load(file)
+            json_file = json.load(file)
         self.reactor_type=reactor_type
-        self.param=data["mat_prop"][reactor_type]
+        self.param=json_file["mat_prop"][reactor_type]
+        self.general_param=json_file["general_prop"]
         
         self.e_cl=self.check(e_cl) #weight enrichment
         self.e_U=self.check(self.param["initial_enrich_U"]) #weight enrichement
@@ -42,7 +48,7 @@ class MCFR():
         self.get_flux=get_flux
         self.prefix=prefix
         path_lib="\"/global/home/groups/co_nuclear/serpent/xsdata/"
-        self.label_lib={"ENDF7":{"mat":".09c","path":path_lib+"endfb7/sss_endfb7u.xsdata\""},"ENDF8":{"mat":".02c","path":path_lib+"endf8/endf8.xsdata\""},"LANL":{"mat":".02l","path":path_lib+"LANL_Cl35/LANL_Cl35.xsdata\""}}
+        self.label_lib={"ENDF7":{"mat":".09c","path":path_lib+"endfb7/sss_endfb7u.xsdata\""},"ENDF8":{"mat":".02c","path":path_lib+"endf8/endf8.xsdata\""},"LANL":{"mat":".02c","path":path_lib+"LANL_Cl35/LANL_Cl35.xsdata\""}}
         self.temp_salt=self.param["temp"] #temperature in K of the salt
         
         #data for composition 
@@ -68,6 +74,7 @@ class MCFR():
         
         #virtual attributes to be attributed in the child class, paths, also generation of composition
         self.gen_comp()
+        self.batch_int=1
         self.folder_name=None
         self.file_name=None
         self.out_path=None
@@ -168,9 +175,9 @@ class MCFR():
                 sss_str.append(f"Replace{prefix}.{i}")
         
         #variables to replace the placeholders
-        param=[self.pop,self.active,self.inactive]   #running parameters
+        param=[self.pop,self.active,self.inactive,1,self.batch_int,self.batch_int]   #running parameters
         path_lib=[self.label_lib[self.lib_cl]["path"]]
-        if self.lib_cl!=self.lib_all:
+        if self.lib_cl!=self.lib_all and self.lib_cl!="LANL":
             path_lib.append(self.label_lib[self.lib_all]["path"])
         
         #data to fill in material definition serpent
@@ -264,7 +271,7 @@ class MCFR():
         with open(os.path.join(self.folder_name,filename), "w") as file:
             file.write("".join(saved_input))
 
-    def run_serpent(self,nodes,partition):
+    def run_serpent(self,nodes,partition,time):
         """run the generated SERPENT file
 
         Args:
@@ -272,7 +279,7 @@ class MCFR():
         """
          # List all files in the directory
         files = os.listdir(self.folder_name)
-        self.gen_exec(nodes=nodes,partition=partition)
+        self.gen_exec(nodes=nodes,partition=partition,time=time)
         # Iterate through files and delete those starting with the specified prefix
         for file in files:
             if file.startswith(self.file_name+"_") or file.startswith(self.file_name+"."):
@@ -331,16 +338,19 @@ class MCFR():
             resFile=self.out_path+f"_det{ind}.m"
             res=serpentTools.read(resFile,reader="det")
             data=res.detectors["flux"]
+            E=data.grids["E"][:,1]
             flux=data.tallies
             flux_s=data.errors
-            E=data.grids["E"][:,1]
+            du=np.log(E/data.grids["E"][:,0])
+            flux_tot=np.sum(flux)
+            flux=flux/du
             plt.step(E,flux,where="post",label=f"{step} years")
             plt.fill_between(E,flux-flux*flux_s,flux+flux*flux_s,alpha=0.4,step="post")
             #print(f"{np.sum(flux):.3e} +/- {np.sum(flux*flux_s):.3e}")
 
         plt.xscale('log')
         plt.yscale('linear')
-        plt.xlabel("BU years")
+        plt.xlabel("Energy [MeV]")
         plt.ylabel("flux [cm$^{-2}$s$^{-1}$]")
         plt.title(f'Evolution of flux for ${{\lambda_{{in}}}}$={self.mflow_in} /s, Cl_e={self.e_cl*100} w%',fontsize = 10)
         plt.grid()
@@ -348,7 +358,7 @@ class MCFR():
         plt.savefig(os.path.join(self.folder_name,plot_dir,f"flux_{self.file_name}.png"))
         plt.close()
         
-        return flux
+        return unp.uarray(flux,flux_s*flux),E,flux_tot
 
 
 class Static(MCFR):
@@ -387,16 +397,18 @@ class Static(MCFR):
         self.exec_name=f"execute_{self.lib_cl}_{self.e_cl}.sub"
         self.write_to_file(sss_str,variables,self.template_path,self.exec_name)
         
-    def run_serpent(self, nodes=1, partition="savio3"):
+    def run_serpent(self, nodes=1, partition="savio3",time=2):
         print(f"Starting Static simulation for Cl35-lib: {self.lib_cl}, for All-lib {self.lib_all} and with Cl enrichment {self.e_cl*100} w% ")
-        super().run_serpent(nodes, partition)
+        super().run_serpent(nodes, partition,time)
         
     def extract_flux(self,plot_dir=""):
+        "output flux per unit lethargy"
         resFile=self.out_path+f"_det0.m"
         res=serpentTools.read(resFile,reader="det")
         data=res.detectors["flux"]
         E=data.grids["E"][:,1]
         du=np.log(E/data.grids["E"][:,0])
+        flux_tot=np.sum(data.tallies)
         flux=data.tallies/du
         flux_s=data.errors
         plt.figure()
@@ -412,7 +424,7 @@ class Static(MCFR):
         plt.savefig(os.path.join(plot_path,f"flux_{self.file_name}.png"))
         plt.close()
         
-        return flux,E
+        return unp.uarray(flux,flux_s*flux),E,flux_tot
 
 
 class Depletion(MCFR):
@@ -469,7 +481,7 @@ class Depletion(MCFR):
         template_path=[self.ssspath_template,os.path.join(self.template_folder,"temp_dep")]
         self.write_to_file(sss_str,variables,template_path,self.file_name)
     
-    def gen_exec(self,time=3,nodes=1, partition="savio3"):
+    def gen_exec(self,time=5,nodes=1, partition="savio3"):
         """generate execute file
 
         Args:
@@ -494,9 +506,9 @@ class Depletion(MCFR):
             interval += 200
         return Bu_steps
             
-    def run_serpent(self, nodes=1, partition="savio3_bigmem"):
+    def run_serpent(self, nodes=1, partition="savio3_bigmem", time=4):
         print(f"Starting Depletion simulation for Cl35-lib: {self.lib_cl}, for All-lib {self.lib_all} and with Cl enrichment {self.e_cl*100} w% and mflow={self.mflow_in:.3e} /s ")
-        super().run_serpent(nodes, partition)
+        super().run_serpent(nodes, partition,time)
         
     def extract_dep_m(self,isotopes,variable,plot_dir="",do_plot=True,logy=True):
         """
@@ -608,7 +620,7 @@ class Depletion(MCFR):
 
 
 class Sensitivity(MCFR):
-    def __init__(self,sens_iso="all",sens_MT="all_MT",sens_resp="keff",mflow_in=None,mflow_out=None,equi_comp=False,e_cl=0.75,e_U_stock=0.1975,lib_cl="ENDF8",lib_all="ENDF8",pop=1e5,active=500,inactive=25,reactor_type="MCFR_C",get_flux=False,prefix="",BU_years=60):
+    def __init__(self,sens_iso="all",sens_MT="all_MT",sens_resp="keff",mflow_in=None,mflow_out=None,equi_comp=False,e_cl=0.75,e_U_stock=0.1975,lib_cl="ENDF8",lib_all="ENDF8",pop=1e5,active=500,inactive=50,reactor_type="MCFR_C",get_flux=False,prefix="",BU_years=60):
         """_summary_
 
         Args:
@@ -619,7 +631,7 @@ class Sensitivity(MCFR):
             other parameters described in other class definitions
         """
         super().__init__(e_cl,e_U_stock,lib_cl,lib_all,pop,active,inactive,reactor_type,get_flux,prefix)
-        
+        self.NEG=self.general_param["NEG"]
         self.sssinput_MT=self._process_sens_MT(sens_MT) #check whether the list is MT or RX or all or all_MT
         
         if mflow_in is not None and not equi_comp:
@@ -643,7 +655,8 @@ class Sensitivity(MCFR):
             self.restart_file=dep.file_name+".wrk"
             #if restart file doesn't exist run depletion
             if not os.path.exists(os.path.join(self.folder_name,self.restart_file)):
-                dep.run_serpent(nodes=4,partition="savio2_bigmem")
+                print(f"restart file {self.restart_file} not found thus depletion simulation lauched")
+                dep.run_serpent(nodes=8,partition="savio4_htc")
             dep.extract_dep_m(["total"],"mdens","plot")
             add_txt="equi"
             resFile=f"{dep.out_path}_dep.m"
@@ -678,7 +691,13 @@ class Sensitivity(MCFR):
         else:
             raise ValueError("Make sure the sens_iso variable is either a list, an int, or the str all,")
         
-        
+        self.batch_int=30
+        while self.batch_int<self.active:
+            if self.active%self.batch_int==0:
+                break
+            self.batch_int+=1
+            
+
         self.sens = None #list of sensitivities in energy in format (len(zaid)*len(RX),33) for 33 Energy group.
         self.sens_s = None #absolute uncertainty in sensitivity
         self.zaid_MT = None #a list of format [[zaid1,RX1],[zaid1,RX2],...].
@@ -759,7 +778,7 @@ class Sensitivity(MCFR):
         template_path=[self.ssspath_template,os.path.join(self.template_folder,"temp_sens")]
         self.write_to_file(sss_str,variables,template_path,self.file_name)
  
-    def gen_exec(self,time=2,nodes=1, partition="savio3"):
+    def gen_exec(self,time=30,nodes=1, partition="savio3"):
         """generate execute file
 
         Args:
@@ -776,7 +795,7 @@ class Sensitivity(MCFR):
         super().run_serpent(nodes, partition,time)    
      
     def get_adjsens(self,zai,pert,material="total",integralE=False):
-        """Get an individual sensitivity 
+        """Get an individual sensitivity from a zaid perturbation pair, in the serpent readable format for both (check sens.m file to see foramt)
 
         Args:
             material (str): material. Defaults to total
@@ -787,6 +806,8 @@ class Sensitivity(MCFR):
         Returns:
             _type_: sensitivity and absolute uncertainty
         """
+        conv={"mt 452 xs":"nubar total", "mt 455 xs": "nubar delayed", "mt 456 xs": "nubar prompt","mt 1018 xs": "chi total"}
+        
         if not integralE:
             ks=self.sens_file.sensitivities["keff"]
         else:
@@ -796,11 +817,13 @@ class Sensitivity(MCFR):
                 pass
             else:
                 zai=int(zai)
+        if pert in conv:
+            pert=conv[pert]
         
         kslice = ks[
             self.sens_file.materials[material],  # index for sensitivity due to all materials
             self.sens_file.zais[zai],  # index for sensitivity due to isotope 
-            self.sens_file.perts[pert],  # index for sensitivity due to fission xs
+            self.sens_file.perts[pert],  # index for sensitivity due to a reaction
         ]
         # Normalize per unit lethargy
         if integralE:
@@ -814,12 +837,12 @@ class Sensitivity(MCFR):
         unc = np.abs(kslice[:, 1]  * value)
         return value, unc
      
-    def extract_sens_m(self,zais="all",perts="all",plot_dir="",do_plot=False):
+    def extract_sens_m(self,zais="all",perts=["2","4","102","103","107","16","18","452"],plot_dir="",do_plot=False):
         """extract the sensitivity data for pair of zais pert
 
         Args:
             zais (list): list of isotopes, either zaid or Cl-35 format
-            pert (list): perturbation, that being MT number or name of sum reaction, goes in pair with zais (i.e. zai=[922380, 922380], pert=["capt","fiss"] or ["2","16"])
+            pert (list): perturbation, that being MT number or name of sum reaction, goes in pair with zais (i.e. zai=[922380, 922380] or ["2","16"])
             plot_dir (str, optional): directory towards which to plot. Defaults to "".
             do_plot (bool, optional): whether or not to plot. Defaults to True.
 
@@ -828,9 +851,9 @@ class Sensitivity(MCFR):
         """
         self.sens_file=serpentTools.read(f"{self.out_path}_sens0.m")
         self.pert_list=list(self.sens_file.perts.keys())
-        if zais=="all":
+        if isinstance(zais,str) and zais=="all":
             zais=self.sens_iso
-        if perts=="all":
+        if isinstance(perts,str) and perts=="all":
             perts=self.pert_list
         else:
             perts=MT_to_serpent_MT(perts)
@@ -845,14 +868,14 @@ class Sensitivity(MCFR):
                 if not (i=="total" or j=="total xs"):
                     self.sens.append(value)
                     self.sens_s.append(unc)
-                    #generate a list of format [[zaid1,RX1],[zaid1,RX2],...].
+                    #generate a list of format [[zaid1,n1],[zaid1,n2],...].
                     self.zaid_MT.append([i, j.split()[1]])
                 #combine the zaid_MT list format with the inegralE sensitivity coefficient with abs uncertainty
                 self.zaid_MT_intEsens.append([ zai_to_nuc_name(i),str(sssmtlist_to_RXlist( [j])[0]),*self.get_adjsens(i, j,integralE=True)])
         # plotting energy dependent sensitivity profile
-        print(np.shape(self.sens))
         self.sens=np.array(self.sens)
         self.sens_s=np.array(self.sens_s)
+        self.zaid_MT=np.array(self.zaid_MT)
         if do_plot:
             plot_path=self.plot_pathgen(plot_dir)
             line_styles = ['-',":", '--', '-.',] 
@@ -1001,7 +1024,7 @@ class Sensitivity(MCFR):
     def check_total_RX(self,reaction):
         """check if all the isotopes for a specfic reaction add up to total"""
         self.check_run_extract()
-
+        ######################################## TODO make sure modulable between MT names and RX names
         sum=0
         sum_s=0
         for row in self.zaid_MT_intEsens:
@@ -1038,7 +1061,8 @@ class Sensitivity(MCFR):
         return total, total_s, sum, sum_s
 
     def abs_contribution_iso(self):
-        """check if all the reactions for a specific isotopes add up to total xs""" 
+        """Take the sum of the obsolute value  of the sensitivity for each reaction to rank the most important isotopes
+        without the negative sensitivities canceling out its importance""" 
         self.check_run_extract()
 
         sum_list=[]
@@ -1058,12 +1082,13 @@ class Sensitivity(MCFR):
             sum_list.append(sum)
             sum_list_s.append(sum_s)
         plt.figure(figsize=(10, 6))
-        ind_0=50
+
         abs_sens=np.array(sorted(zip(self.sens_iso,sum_list,sum_list_s),key=lambda x: float(x[1]),reverse=True))
         name=[]
+
+        ind_0=  next((index for index, value in enumerate(np.float64(abs_sens[:,1])) if (value == 0 or np.abs(value/np.max(np.abs(np.float64(abs_sens[:,1]))))<1e-3)), None)
         for i in abs_sens[1:ind_0,0]:
             name.append(zai_to_nuc_name(i))
-
         plt.bar(name, np.float64(abs_sens[1:ind_0,1])/np.float64(abs_sens[0,1])*100,bottom=0,align="center", alpha=0.7)
         plt.xlabel('Isotope')
         plt.ylabel('Relative contribution to sum of absolute sensitivities [%]')
@@ -1074,76 +1099,513 @@ class Sensitivity(MCFR):
         plt.ylim(0.1)
         plt.savefig(os.path.join(self.folder_name,"abs_contribution_sens_equi.png"))
 
-        return  sum_list, sum_list_s
-    
-    def error_prop(self):
+        return  abs_sens,ind_0
+   
+    def get_ND_cov_matrix(self):
+
+        '''
+        Load the covariance data that are in the form of .npy binary files that
+        were created by the empy script supplied by Caleb Mattoon
+
+        N_E_G : number of energy groups
+        zais_rx : first column is zaid number, second column is MT (rx)
+        '''
+
+        N_rxs = len(self.zaid_MT)  # number of nuclear data sets
+        
+        sum=[]
+        txt="init"
+        if self.equi_comp:
+            txt="equi"
+        temp=os.path.join(self.folder_name,f"cov_data_origin_{txt}.csv")
+        csv_write=open(temp, "w", newline='') 
+        writer = csv.writer(csv_write)
+        writer.writerow(["Reaction","library"])
+        
+        M_sigma = np.zeros((N_rxs*self.NEG, N_rxs*self.NEG))  # initialize nuclear data cov matrix
+        tag_lib={}
+        for i, row1 in enumerate(self.zaid_MT):
+            #since correlation between block do 2 loops for the correlation between the two.  
+            # i is the index of the row and row1 contains the two columns of the being the zaid and rx.
+            iStart1 = i*self.NEG   # indices for M_sigma
+            iEnd1 = (i+1)*self.NEG
+
+            zaid1 = row1[0][:-1]
+            #rx1 = RXtoMFMT(row1[1])
+            rx1 = row1[1]
+
+            for j, row2 in enumerate(self.zaid_MT):
+
+                iStart2 = j*self.NEG    # indices for M_sigma
+                iEnd2 = (j+1)*self.NEG
+
+                zaid2 = row2[0][:-1]
+                rx2=row2[1]#rx2 = RXtoMFMT(row2[1])
+
+                if zaid1 != zaid2:  # no inter nuclide correlations, skip loop
+                    continue
+                
+                if zaid1 not in tag_lib:
+                    file_name = f"{zaid1}-2-{zaid1}-2.npy"
+                    cov_path=self.general_param["path_ENDF8"]
+                    lib="ENDF8"
+                    if zaid1=="17035" and self.lib_cl=="LANL":
+                        cov_path=self.general_param["path_LANL"]
+                        lib="LANL"
+                    file = os.path.join(cov_path, file_name)
+                    if os.path.exists(file):
+                        tag_lib[zaid1]=lib
+                    elif os.path.exists(os.path.join(self.general_param["path_TENDL"], file_name)):
+                        cov_path=self.general_param["path_TENDL"]
+                        lib="TENDL"
+                        tag_lib[zaid1]=lib
+                    else:
+                        tag_lib[zaid1]="No library"
+       
+                file_name = f"{zaid1}-{rx1}-{zaid2}-{rx2}.npy"
+                file = os.path.join(cov_path, file_name)
+
+                # File that is the opposite transpose
+                file_name_opp = f"{zaid2}-{rx2}-{zaid1}-{rx1}.npy" 
+                file_opposite = os.path.join(cov_path,  file_name_opp)
+
+                # If the npy exists, otherwise, the matrix will stay as zeros
+                # if file_name=="17035-2-17035-102.npy":
+                    
+                #         pass
+                # elif file_name=="17035-102-17035-2.npy":
+                #         pass
+                # else:
+                #re_initialise mat
+                mat=np.zeros_like(M_sigma[iStart1:iEnd1, iStart2:iEnd2])
+                if os.path.exists(file):
+                    mat=np.load(file)
+                    M_sigma[iStart1:iEnd1, iStart2:iEnd2] = mat
+                elif os.path.exists(file_opposite):  # if the transpose matrix exists, load it and transpose it
+                    mat = np.load(file_opposite).T
+                    M_sigma[iStart1:iEnd1, iStart2:iEnd2] = mat
+                else:
+                    pass
+                #    pass
+                    #print('%s not found. Covariances set to 0' % file)
+                    #a=psd_closeness(mat)
+                    #if a["sum_of_negative_eigenvalues"]!=0:
+                    #    sum.append(np.linalg.norm(mat-M_sigma[iStart1:iEnd1, iStart2:iEnd2],"fro")/np.linalg.norm(mat,"fro"))
+                        #print(f"if the original cov {file_name} is not PSD then after modification it is {psd_closeness(M_sigma[iStart1:iEnd1, iStart2:iEnd2])}")
+                        #print(file_name,a,np.linalg.norm(mat-M_sigma[iStart1:iEnd1, iStart2:iEnd2],"fro"))
+
+        writer.writerows([[iso,lib] for iso, lib in tag_lib.items()])
+        csv_write.close()
+        print(f"The following file has been written : {temp} ")
+        #TODO check positive semi-definite
+        # Loads a triangular matrix, need to make it symmetric
+        # M_sigma = M_sigma + M_sigma.T - np.diag(M_sigma)
+        #M_sigma = (M_sigma + M_sigma.T)/2.
+        #M_sigma= deflate_sparse_matrix_eigen(M_sigma,300).toarray()#deflate_sparse_matrix(M_sigma,1000).toarray()
+        #print(f"sum of frobenius distance changed in the covariance matrices {np.sum(sum),np.max(sum)}")
+        return M_sigma
+            
+    def error_prop(self,limit=True):
         """propagate error with covariance matrix and sensitivity vector using the sandwidch rule, 
         if 
 
         Args:
-            isotope (_type_, optional): _description_. Defaults to None.
-            reaction (_type_, optional): _description_. Defaults to None.
+            limit (bool,optional): if true above a limit of 250 zaid_MT pairs will find the most sensitive isotopes to select
+            using the absolute senstivity sum, taking the the isotopes which are up to 1000 times smaller than the total 
 
 
         Returns:
             _type_: _description_
         
         """
+        def mt_pair_rx(reaction):
+            MT=reaction.split("-")
+            rx1=MTtoRX(MT[0])
+            if len(MT)>1:
+                rx2=MTtoRX(MT[1])
+                return "-".join((rx1,rx2))
+            else:
+                return rx1
+                
+        if  len(self.zaid_MT)>250 and limit:
+            #if there are too many zaid_MT pairs then the matrix will become too big for computation and compute very
+            #irelavant isotopes, thus a selection of the most sensitive isotope are taken
+            abs_sens,ind0=self.abs_contribution_iso()
+            unique_MT=np.unique(self.zaid_MT[:,1])
+            self.extract_sens_m(abs_sens[1:ind0,0],perts=unique_MT)
+    
 
-        self.path_cov=os.path.join('c:/',"Users","jbval","PDM","02_cov","cov_npy","33g_TENDL2023")
-
-        N_E_G = 33# number of energy groups
         flat_sens=self.sens.flatten()
-        cov=get_ND_cov_matrix(self.zaid_MT,33,self.path_cov)
-        covar=flat_sens.dot(cov).dot(flat_sens.T)
-        print(np.sqrt(covar)*1e5)
+        flat_sens_s=self.sens_s.flatten()
+        flat_sens=unp.uarray(flat_sens,flat_sens_s)
+        
+        cov=self.get_ND_cov_matrix()
+        modified_cov=copy.deepcopy(cov)
+        
 
         # Step through zaids in sens_data pd dataframe to decompose covar of 2 nuc/rx pairs
         covar_dict = {}
         iStart = 0; iEnd = 0; iNuc = 0;
         zaid_finished = []
+        csv_data=[]
         for row1 in self.zaid_MT:
             zaid1 = row1[0][:-1]
             if zaid1 not in zaid_finished:
-                for row2 in self.zaid_MT[iNuc:]:
+                for row2 in self.zaid_MT[:]:
                     if zaid1 == row2[0][:-1]:
-                        iEnd += N_E_G
+                        iEnd += self.NEG
                 zaid_finished.append(zaid1)
 
                 S_nuc = flat_sens[iStart:iEnd]
-                M_sigma_rel_nuc = cov[iStart:iEnd,
-                                            iStart:iEnd]   
+                M_sigma_rel_nuc = cov[iStart:iEnd,iStart:iEnd]  
+                 
                 # Then calculate covar
-                covar = S_nuc.dot(M_sigma_rel_nuc).dot(S_nuc.T)
-                covar_dict[zaid1] = covar
+                if  not isPD(M_sigma_rel_nuc):
+                    #if not PSD tranform it to PSD
+                    M_sigma_rel_nuc_PSD=deflate_sparse_matrix_eigen(M_sigma_rel_nuc)
+                    
+                    #find the difference matrix between the original and the corrected PSD
+                    diff=M_sigma_rel_nuc-M_sigma_rel_nuc_PSD
+                    plotpath=self.plot_pathgen("cov_matrix")
+                    #plot of this diff matrix
+                    plt.figure()
+                    iso=zai_to_nuc_name( str(zaid1+"0"))
+                    #plt.title(f"{iso} Cov. relative difference wrt. deflation")
+                    plt.title(f"{iso} Magnitude of Covariance")
+                    vmax = np.max(np.abs(diff))
+                    img = plt.imshow(M_sigma_rel_nuc,interpolation="nearest")
+                    #img = plt.imshow(diff/M_sigma_rel_nuc*100, cmap='bwr',interpolation="nearest",vmin=-vmax,vmax=vmax)#diff/M_sigma_rel_nuc*100
+                    #plt.colorbar(img,label="relative difference [%] ")
+                    plt.colorbar(img,label="Magnitude")
+                    num=int((iEnd-iStart)/self.NEG)
+                    tick_positions=np.arange(0, num*self.NEG, self.NEG)
+                    plt.xticks(tick_positions-1)
+                    plt.yticks(tick_positions-1)
+                    #Set minor ticks at positions halfway between major ticks for the isotope names
+                    minor_tick_positions = tick_positions + (tick_positions[1]-tick_positions[0]) / 2.
+                    plt.gca().xaxis.set_minor_locator(FixedLocator(minor_tick_positions))
+                    plt.gca().set_xticklabels(MTtoRX(self.zaid_MT[:num,1]), minor=True, rotation=25, ha='center')
+                    plt.gca().yaxis.set_minor_locator(FixedLocator(minor_tick_positions))
+                    plt.gca().set_yticklabels(MTtoRX(self.zaid_MT[:num,1]), minor=True, rotation=0)
+                    plt.gca().tick_params(axis='both', which='major', length=0, labelsize=0)
+                    plt.grid()
+                    plt.tight_layout()
+                    plt.savefig(os.path.join(plotpath,f"{zaid1}_cov.png"))
+                    plt.close()
+                else:
+                    M_sigma_rel_nuc_PSD=M_sigma_rel_nuc
+                modified_cov[iStart:iEnd,iStart:iEnd] =M_sigma_rel_nuc_PSD
                 
+
+                covar = S_nuc.dot(M_sigma_rel_nuc_PSD).dot(S_nuc.T)
+                covar_notPSD= S_nuc.dot(M_sigma_rel_nuc).dot(S_nuc.T)
+                covar_dict[iso] = covar
+                csv_data.append([iso,format(psd_closeness(M_sigma_rel_nuc)["sum_of_negative_eigenvalues"],".4e"),format(psd_closeness(M_sigma_rel_nuc_PSD)["sum_of_negative_eigenvalues"],".4e"),
+                                format(np.linalg.norm(diff,"fro")/ np.linalg.norm(M_sigma_rel_nuc, 'fro')*100,".4e"),unp.sqrt(covar_notPSD)*1e5,unp.sqrt(covar)*1e5])
                 iStart = iEnd
             iNuc += 1
+        
+        if self.equi_comp:
+            temp_str="equilibrium"
+        else:
+            temp_str="initial"
+        #save the covariance data as well as the PSD covariance matrix
+        self.PSD_cov=modified_cov  
+        self.mat_cov=cov
+        #get total uncertainty from all the reactions
+        unc_tot_PSD=flat_sens.dot(modified_cov).dot(flat_sens.T)
+        unc_tot=flat_sens.dot(self.mat_cov).dot(flat_sens.T)
+        csv_data.append(["total",format(psd_closeness(self.mat_cov)["sum_of_negative_eigenvalues"],".4e"),format(psd_closeness(self.PSD_cov)["sum_of_negative_eigenvalues"],".4e"),
+                                format(np.linalg.norm(self.PSD_cov-self.mat_cov,"fro")/ np.linalg.norm(self.mat_cov, 'fro')*100,".4e"),unp.sqrt(unc_tot)*1e5,unp.sqrt(unc_tot_PSD)*1e5])
+        temp=os.path.join(self.folder_name,f"PSD_uncertainty_{temp_str}.csv")
+        csv_write=open(temp, "w", newline='') 
+        writer = csv.writer(csv_write)
+        writer.writerow(["Isotope","Sum_-ve_eigen_origin","Sum_-ve_eigen_corrected","Fro_rel_dist PSD to original [%]","Uncertainty not PSD [pcm]", "Uncertainty PSD [pcm]","Rel unc contribution PSD [%]"])
+        for i,row in enumerate(csv_data):
+            relative_contribution = (row[-1]/1e5)**2 / unc_tot_PSD*100
+            csv_data[i].append(relative_contribution)
+        csv_data=np.array(csv_data)
+        csv_data = csv_data[np.argsort(csv_data[:, -1])[::-1],:]
 
+        writer.writerows(csv_data)
+        csv_write.close()
+        print(f"The following file has been written {temp}")
+
+        if False:
+        # Sort the dict so that it ranks covariance by absolute value
+            covar_dict_abs = {}
+            # Flip keys and values, all zeros and repeated values are lost
+            for nuc, covar in covar_dict.items():
+                covar_dict_abs[str(abs(covar))] = nuc
+            
+            
+            # convert to float so covs can be sorted
+            cov_abs = [abs(float(cov)) for cov in covar_dict_abs.keys()]
+            cov_abs.sort()
+            cov_abs = cov_abs[::-1]  # Flip so its descending
+
+            ranking = []
+            for abs_cov in cov_abs:
+                # Flip back to original keys and values
+                true_key = covar_dict_abs[str(abs_cov)]
+                true_cov = np.sqrt(covar_dict[true_key])*1e5
+                ranking.append([true_key, true_cov])
+
+        #rank per reactions with relative contribution per isotope to the variance
+        ranking_rel=self._var_decomp_rx()
+        ranking_rel_dic = {} # create a dictionary in the which can take isotope and a reaction to get the relative contribution to the variance
+    
+        for item in ranking_rel:
+            isotope_reaction, value = item
+            isotope, reaction = isotope_reaction.split(' ', 1)
+            
+            if isotope not in ranking_rel_dic:
+                ranking_rel_dic[isotope] = {}
+            
+            ranking_rel_dic[isotope][reaction] = value
+        #bar plot per isotope with each istope broken down into relative contributions from sepcific MT pairs
+        #note however that this relative contribution is with respect to the variance and not the uncertainty.
+        #find all the unique isotopes and reactions from the ranked list 
+        unique_rxpairs=[]
+        color_map={}
+        unique_MT=np.unique(self.zaid_MT[:,1])
+        num_col=(len(unique_MT)+1)*len(unique_MT)/2.
+        print(num_col,)
+        colors = distinctipy.get_colors( int(num_col),rng=42)#plt.cm.tab20b(np.linspace(0, 1, len(unique_rxpairs_col)-1))  # Use 'tab20' colormap for distinct colors
+        k=0
+        for j in unique_MT:
+            for i in unique_MT:
+                if i!=j:
+                    txt=f"{j}-{i}"
+                    if f"{i}-{j}" in color_map.keys():
+                        color_map[txt]=color_map[f"{i}-{j}"]
+                    else:
+                        color_map[txt]=colors[k]
+                        k+=1
+                else:
+                    color_map[j]=colors[k]
+                    k+=1
+        print(color_map)
+        #unique_rxpairs=np.array(unique_rxpairs)
+        #unique_rxpairs=np.unique([s.split()[1] for s in ranking_rel[:,0]])
+        isotopes=np.unique([s.split()[0] for s in ranking_rel[:,0]])
+        
+        #add an Other category for the readibility of the plot for reactions below a threshold
+        #unique_rxpairs_col=np.append(unique_rxpairs,"Other")
+        color_map["Other"]=[0.5,0.5,0.5]
+        #create color map linking a reaction to a color, add grey for Other category
+        #colors=np.vstack((colors,[0.5,0.5,0.5]))
+        #color_map = {reaction: color for reaction, color in zip(unique_rxpairs_col, colors)}
+        text_color_map = {reaction:[0,0,0] if reaction=="Other" or np.array_equal(color_map[reaction],[0,1,0]) else distinctipy.get_text_color(color_map[reaction]) for i, reaction in enumerate(color_map.keys())}
+        
+        #remove the first row which is the total row from the plot, and find the index from which the isotopes are more than 100 times
+        #smaller than the first isotopes
+        print(type(csv_data[:,-1]))
+        csv_data=np.delete(csv_data,0,0)
+        print(csv_data[1,-1].n)
+        ind0=  next((index for index, value in enumerate((csv_data[:,-1])) if (value.n == 0 or np.abs(value.n/np.max(np.abs(csv_data[:,-1])))<1e-2)), None)
+        n_items=len(isotopes)
+        if ind0 is None:
+            ind0=n_items
+            
+        #start of the plot
+        plt.figure()
+        fig, ax = plt.subplots(figsize=(10, 6))
+        # Bar width
+        bar_width = 0.4
+        threshold=20# threshold below which reaction pair is considered too small for plot added to the other box
+        # X positions for the bars
+        x_positions = np.arange(ind0)
+        reaction_listed=[]
+        # Plot each bar with stacked contributions from each reaction loop over each isotope
+        for i in range(0,ind0):
+            start = 0
+            other_contribution = 0  # To accumulate small contributions to put in other
+            #sort contributions for such that they appear in order in bar plot
+            sorted_contributions = sorted(ranking_rel_dic[nuc_name_to_zaid(csv_data[i,0])].items(), key=lambda x: np.float64(x[1]), reverse=True)
+            #loop over the sorted reactions for that isotope
+            for reaction, contribution in sorted_contributions:
+                contribution=np.float64(contribution)
+                bar_height = np.float64(csv_data[i,5].n) * contribution/100.
+                #add positive small contributions to others
+                if bar_height < threshold:
+                    if bar_height>0:
+                        other_contribution += contribution
+                else:
+                    #plot the bars as the sum of individual contributions from each reactions
+                    #note that the axis is not too scale since the percent is with respect to the variance and not the uncertainty'
+                    #so 60% of the uncertainty of 1000 pcm is not 600 pcm.
+                    bar_height = np.float64(csv_data[i,5].n) * contribution/100.
+                    ax.bar(x_positions[i], bar_height, bottom=start, color=color_map[reaction], width=bar_width, label=mt_pair_rx(reaction) if reaction not in reaction_listed else "")
+                    start += bar_height
+                    # Annotate percentage
+                    if not np.array_equal(text_color_map[reaction],[0,0,0]):
+                        #if the font color should be white then set it to black and put a box around it
+                        ax.text(x_positions[i], start - bar_height / 2, f'{contribution:.1f}%', ha='center', va='center', color="black", fontsize=8,bbox=dict(facecolor="white",alpha=0.4))
+                    else:
+                        ax.text(x_positions[i], start - bar_height / 2, f'{contribution:.1f}%', ha='center', va='center', color="black", fontsize=8)
+                    reaction_listed.append(reaction)
+            
+            if other_contribution > 0:
+                bar_height = np.float64(csv_data[i,5].n) * other_contribution/100.
+                ax.bar(x_positions[i], bar_height, bottom=start, color=color_map["Other"], width=bar_width, label='Other' if "Other" not in reaction_listed else "")
+                start += bar_height
+                # Annotate percentage for "Other"
+                ax.text(x_positions[i], start - bar_height / 2+20, f'{other_contribution:.1f}%', ha='center', va='center', color=text_color_map["Other"], fontsize=8)
+                reaction_listed.append("Other")
+
+        # Set the x-axis labels
+        ax.set_xticks(x_positions)
+        ax.set_xticklabels(csv_data[:ind0,0],rotation=45)
+
+        # Set the y-axis label
+        ax.set_ylabel('Uncertainty (pcm)')
+
+        # Add a legend
+        ax.legend(loc='upper right')#, bbox_to_anchor=(1.15, 1))
+        #ax.grid()
+
+        # Show the plot
+
+        plt.title(f"PSD corrected keff uncertainty for {self.reactor_type} at {temp_str}")
+        fig.tight_layout()
+
+        fig.savefig(os.path.join(self.folder_name,f"keff_unc_rx_{temp_str}.png"),dpi=400)
+        # plt.figure()
+        # plt.bar(csv_data[1:ind0,0],np.float64(csv_data[1:ind0,-2]),align="center")
+        # if self.equi_comp:
+        #     temp_str="equilibrium"
+        # else:
+        #     temp_str="initial"
+        # plt.title(f"PSD corrected keff uncertainty for {self.reactor_type} at {temp_str}")
+        # plt.xlabel("Isotope")
+        # plt.ylabel("keff Uncertainty [pcm]")
+        # plt.grid()
+        # plt.tight_layout()
+        # plt.savefig(os.path.join(self.folder_name,f"unc_keff_{temp_str}"))
+      
+    def _var_decomp_rx(self):
+
+        '''
+        Perform variance decomposition on reactions given sensitivity
+        coefficients and nuclear data VCM. Doesn't return 0-valued uncertainties.
+
+        RETURNS:
+            ranking: list of sorted variances
+        '''
+
+        flat_sens=self.sens.flatten()
+        cov=self.get_ND_cov_matrix()
+
+        # Step through zaids and rxs in sens_data pd dataframe to decompose covar of 2 nuc/rx pairs
+        covar_dict = {}  
+        note=0  
+        fro=0
+        for i,row1 in enumerate(self.zaid_MT):
+
+            iStart1 = i*self.NEG   # indices for M_sigma
+            iEnd1 = (i+1)*self.NEG
+            
+            zaid1 = row1[0][:-1]
+            rx1 = row1[1]
+            
+            for  j, row2 in enumerate(self.zaid_MT):
+            
+                iStart2 = j*self.NEG    # indices for M_sigma
+                iEnd2 = (j+1)*self.NEG
+                
+                zaid2 = row2[0][:-1]
+                rx2=row2[1]#rx2 = RXtoMFMT(row2[1])
+                
+                if zaid1 == zaid2:  # no inter nuclide correlations, skip loop
+                    S1_rx = flat_sens[iStart1:iEnd1]
+                    S2_rx = flat_sens[iStart2:iEnd2]
+                    M_sigma_rel_12 = self.mat_cov[iStart1: iEnd1,
+                                                    iStart2: iEnd2]
+                    M_sigma_rel_12_PSD=self.PSD_cov[iStart1: iEnd1,
+                                                    iStart2: iEnd2]
+                    if rx1==rx2: 
+                        M_sigma_rel_12=nearest_psd(M_sigma_rel_12)
+                        covars = S1_rx.T.dot(M_sigma_rel_12).dot(S2_rx)
+                        M_sigma_rel_12_PSD=deflate_sparse_matrix_eigen(M_sigma_rel_12_PSD)
+                        covar_PSD= S1_rx.dot(M_sigma_rel_12_PSD).dot(S1_rx.T)
+                        name = '%s %s' % (zaid1, rx1)
+                    else:
+                        #For the off diagonal contributions one must conserve the sysmetric nature of the covariance and the sandwidch rule needs to have the 
+                        #the same value on the RHS and LHS, so two sensitivity are stacked and multiply block matrix of format [[0 M.T][M 0]]
+                        zero_matrix = np.zeros_like(M_sigma_rel_12)
+
+                        # Create the block matrix
+                        block_matrix = np.block([
+                            [self.mat_cov[iStart1: iEnd1,iStart1: iEnd1], M_sigma_rel_12],
+                            [M_sigma_rel_12.T, self.mat_cov[iStart2: iEnd2,iStart2: iEnd2]]
+                        ])
+                        block_matrix_PSD = np.block([
+                            [self.PSD_cov[iStart1: iEnd1,iStart1: iEnd1], M_sigma_rel_12_PSD],
+                            [M_sigma_rel_12_PSD.T, self.PSD_cov[iStart2: iEnd2,iStart2: iEnd2]]
+                        ])
+                        n = block_matrix.shape[0] // 2
+                        block_matrix2=nearest_psd(block_matrix)
+                        #Solution possible is take the eigendecompositon of the full matrix to get PSD [[M11,M12][M21,M22]] make it PSD, then substract from the 
+                        #uncertainty value the uncertainty of M11 and M22 (think about squares and so on)
+                        name = '%s %s-%s' % (zaid1, rx1, rx2)
+                        def sandwidch(left,mat,right):
+                            return left.dot(mat).dot(right.T)
+
+                        if np.max(block_matrix)!=0:
+                            fro+=np.linalg.norm(block_matrix-block_matrix2,"fro")
+                            #print(name,fro/ np.linalg.norm(block_matrix, 'fro')*100)
+
+
+                        S_stacked=np.hstack((S1_rx,S2_rx))
+                        covars = S_stacked.dot(block_matrix2).dot(S_stacked.T)
+                        covar_PSD= S_stacked.dot((block_matrix2)).dot(S_stacked.T)
+
+                   
+                    name_reverse='%s %s-%s' % (zaid1, rx2, rx1)
+                    if name_reverse not in covar_dict.keys():
+                        covar_dict[name] = covars
+
+        #Up until now the uncercertainty of for example 102-2, but this was for both 102 and 2, but not just the cross term, in order to
+        # obtain that we can take this term and substract the uncertainty of 102 and of 2, which will give us the uncertainty of the cross term 102,2
+        sum = {key.split()[0]: 0 for key in covar_dict.keys()}
+        for nuc_rx, covar in covar_dict.items():
+            nuc,Rxs=nuc_rx.split()
+            if "-" in nuc_rx:
+                Rx1,Rx2=Rxs.split("-")
+                temp=covar_dict[nuc_rx]
+                covar_dict[nuc_rx]=covar-covar_dict[" ".join((nuc,Rx1))]-covar_dict[" ".join((nuc,Rx2))]
+
+            if covar_dict[nuc_rx]<0:
+                #print(nuc_rx,temp,-covar_dict[" ".join((nuc,Rx1))]-covar_dict[" ".join((nuc,Rx2))])
+                note+=covar_dict[nuc_rx]
+            else: 
+                sum[nuc]+=covar_dict[nuc_rx]
         # Sort the dict so that it ranks covariance by absolute value
         covar_dict_abs = {}
         # Flip keys and values, all zeros and repeated values are lost
-        for nuc, covar in covar_dict.items():
-            covar_dict_abs[str(abs(covar))] = nuc
+        for nuc_rx, covar in covar_dict.items():
+            covar_dict_abs[str((covar))] = nuc_rx
 
         # convert to float so covs can be sorted
-        cov_abs = [abs(float(cov)) for cov in covar_dict_abs.keys()]
+        cov_abs = [(float(cov)) for cov in covar_dict_abs.keys()]
         cov_abs.sort()
         cov_abs = cov_abs[::-1]  # Flip so its descending
 
-        ranking = []
+        ranking=[]
+        ranking_rel = []
         for abs_cov in cov_abs:
             # Flip back to original keys and values
             true_key = covar_dict_abs[str(abs_cov)]
             true_cov = covar_dict[true_key]
-            ranking.append([true_key, true_cov])
+            ranking.append([true_key, (true_cov)])
+            ranking_rel.append([true_key, np.float64(true_cov)/sum[true_key.split()[0]]*100])
+        sqrt_dict = {key: np.sqrt(value)*1e5 for key, value in sum.items()}
+        print(ranking_rel,fro,note,sqrt_dict)
+        #ranking_rel={item[0]: item[1] for item in ranking_rel}
+        return np.array(ranking_rel)
 
-        print(np.sum(np.float64(cov_abs)))
-        print(ranking)
-
-      
-
-
+#class Pert_sens(Sensitivity)
                 
 ######################################################################################################
 

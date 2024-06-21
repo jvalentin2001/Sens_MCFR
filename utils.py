@@ -4,7 +4,11 @@ import warnings, os
 import scipy.sparse as sparse
 import scipy.sparse.linalg as sla
 from scipy.linalg import lapack
-import statsmodels.stats.correlation_tools as corr
+import statsmodels.stats.correlation_tools as corr 
+from scipy.sparse import csc_matrix
+from scipy.sparse.linalg import svds
+from uncertainties import unumpy as unp
+
 
 
 global partitions 
@@ -41,7 +45,8 @@ def zai_to_nuc_name(zaid):
     e.g. nuclide 10010 for Hydrogen (Z=1) or 90190 for Fluorine (Z = 9)
     zaid (str)
     '''
-
+    if isinstance(zaid, int):
+        zaid=str(zaid)
     if 'lwtr' in zaid:
         isoName = 'S(alpha, beta) light water'
 
@@ -91,6 +96,31 @@ def zai_to_nuc_name(zaid):
 
     return isoName
 
+def nuc_name_to_zaid(nuc):
+    "nuc name in Cl-35 format"
+    Z,A=nuc.split("-") 
+    ZDict= {'H': 1, 'He': 2, 'Li': 3, 'Be': 4, 'B': 5, 'C': 6, 'N': 7, 'O': 8, 'F': 9, 'Ne': 10,
+    'Na': 11, 'Mg': 12, 'Al': 13, 'Si': 14, 'P': 15, 'S': 16, 'Cl': 17, 'Ar': 18, 'K': 19,
+    'Ca': 20, 'Sc': 21, 'Ti': 22, 'V': 23, 'Cr': 24, 'Mn': 25, 'Fe': 26, 'Co': 27, 'Ni': 28,
+    'Cu': 29, 'Zn': 30, 'Ga': 31, 'Ge': 32, 'As': 33, 'Se': 34, 'Br': 35, 'Kr': 36, 'Rb': 37,
+    'Sr': 38, 'Y': 39, 'Zr': 40, 'Nb': 41, 'Mo': 42, 'Tc': 43, 'Ru': 44, 'Rh': 45, 'Pd': 46,
+    'Ag': 47, 'Cd': 48, 'In': 49, 'Sn': 50, 'Sb': 51, 'Te': 52, 'I': 53, 'Xe': 54, 'Cs': 55,
+    'Ba': 56, 'La': 57, 'Ce': 58, 'Pr': 59, 'Nd': 60, 'Pm': 61, 'Sm': 62, 'Eu': 63, 'Gd': 64,
+    'Tb': 65, 'Dy': 66, 'Ho': 67, 'Er': 68, 'Tm': 69, 'Yb': 70, 'Lu': 71, 'Hf': 72, 'Ta': 73,
+    'W': 74, 'Re': 75, 'Os': 76, 'Ir': 77, 'Pt': 78, 'Au': 79, 'Hg': 80, 'Tl': 81, 'Pb': 82,
+    'Bi': 83, 'Po': 84, 'At': 85, 'Rn': 86, 'Fr': 87, 'Ra': 88, 'Ac': 89, 'Th': 90, 'Pa': 91,
+    'U': 92, 'Np': 93, 'Pu': 94, 'Am': 95, 'Cm': 96, 'Bk': 97, 'Cf': 98, 'Es': 99}
+    mass_number = int(A)
+    
+    # Get the atomic number using the reversed dictionary
+    atomic_number = ZDict[Z]
+    
+    # Form the ZAI number
+    zai_number = f"{atomic_number:02d}{mass_number:03d}"
+    
+    return zai_number
+
+
 def MTtoRX(MFMT):
     '''
     Convert from MFx/MTx to reaction string
@@ -98,20 +128,28 @@ def MTtoRX(MFMT):
 
     # Dictionary mapping MFx/MTx to reaction string
     MFMT_Dict = {"1": "total", "2": "elastic",
-                 "4": "inelastic", "16": "n,2n", "18": "fission","28":"n,np","51":"inelastic (1st excited)","52":"inelastic (2nd excited)","53":"inelastic (3rd excited)","54":"inelastic (4th excited)","55":"inelastic (5th excited)",
-                 "103": "n,p", "102": "n,gamma",
+                 "4": "inelastic", "16": "n,2n", "18": "fission","28":"n,np","51":"inelastic (1st)","52":"inelastic (2nd)","53":"inelastic (3rd)","54":"inelastic (4th)","55":"inelastic (5th)",
+                 "91": "inelastic (cont)","103": "n,p", "102": "n,gamma",
                  "104": "n,d", "105": "n,t", "106": "n,3he",
-                 "107": "n,alpha","111":"n,2p", "182": "chi delayed"}
+                 "107": "n,alpha","111":"n,2p", "182": "chi delayed", "452":"nubar total","455":"nubar delayed","456": "nubar prompt","1018": "chi total"}
 
+    ret_to_str=False
     # Check if MFx/MTx is in the dictionary
-    if MFMT in MFMT_Dict:
-        # If so, return the corresponding reaction string
-        return MFMT_Dict[MFMT]
-    else:
-        return MFMT
-        # If not, raise a ValueError
-        #raise ValueError("Mapping not available for given MFx/MTx: {}".format(MFMT))
-
+    if isinstance(MFMT,str):
+        MFMT=[MFMT]
+        ret_to_str=True
+    list_RX=[]
+    for MT in MFMT:
+        if MT in MFMT_Dict:
+            # If so, return the corresponding reaction string
+            list_RX.append(MFMT_Dict[MT])
+        else:
+            list_RX.append(MT)
+            # If not, raise a ValueError
+            #raise ValueError("Mapping not available for given MFx/MTx: {}".format(MFMT))
+    if ret_to_str:
+        return list_RX[0]
+    return list_RX
 def sssmtlist_to_RXlist(list_MT):
     """Convert a list from serpent output in MT format (i.e. mt n xs) into RX
 
@@ -152,12 +190,16 @@ def MT_to_serpent_MT(list_MT):
     """
     conv={"ela":"ela scatt","sab":"sab scatt","inl":"inl scatt","fiss":"fission","nxn":"nxn","total":"total","capt":"capture"}
     serpent_MT=[]
-    if all(isinstance(MT,int) or MT.isdigit()for MT in list_MT):
-        serpent_MT=[f"mt {x} xs" for x in list_MT]
-    elif all(MT.isalpha() and MT in conv for MT in list_MT) :
-        serpent_MT=[ f"{conv[x]} xs"  for x in list_MT ]
-    else:
-        raise ValueError("Make sure list is only MT or only sum reactions can't be both")
+    for MT in list_MT: 
+        if isinstance(MT,int) or MT.isdigit():
+            serpent_MT.append(f"mt {MT} xs")
+        elif MT.isalpha() :
+            if MT in conv:
+                serpent_MT.append(f"{conv[MT]} xs")
+            else:
+                serpent_MT.append(MT)
+#    else:
+#        raise ValueError("Make sure list is only MT or only sum reactions can't be both")
     return serpent_MT
 
 def plot_two_sens(array1,array2,label_array1="",label_array2="",plot_name="sens_compare.png"):
@@ -246,68 +288,19 @@ def plot_two_sens(array1,array2,label_array1="",label_array2="",plot_name="sens_
     plt.tight_layout()
     plt.savefig(plot_name,dpi=400)
 
-def get_ND_cov_matrix(zaid_rx, N_E_G, cov_path):
-
-    '''
-    Load the covariance data that are in the form of .npy binary files that
-    were created by the empy script supplied by Caleb Mattoon
-
-    N_E_G : number of energy groups
-    zais_rx : first column is zaid number, second column is MT (rx)
-    '''
-
-    N_rxs = len(zaid_rx)  # number of nuclear data sets
-    
-
-    M_sigma = np.zeros((N_rxs*N_E_G, N_rxs*N_E_G))  # initialize nuclear data cov matrix
-    for i, row1 in enumerate(zaid_rx):
-        #since correlation between block do 2 loops for the correlation between the two.  
-        # i is the index of the row and row1 contains the two columns of the being the zaid and rx.
-        iStart1 = i*N_E_G   # indices for M_sigma
-        iEnd1 = (i+1)*N_E_G
-
-        zaid1 = row1[0][:-1]
-        #rx1 = RXtoMFMT(row1[1])
-        rx1 = row1[1]
-
-        for j, row2 in enumerate(zaid_rx):
-
-            iStart2 = j*N_E_G    # indices for M_sigma
-            iEnd2 = (j+1)*N_E_G
-
-            zaid2 = row2[0][:-1]
-            rx2=row2[1]#rx2 = RXtoMFMT(row2[1])
-
-            if zaid1 != zaid2:  # no inter nuclide correlations, skip loop
-                continue
-
-            file_name = f"{zaid1}-{rx1}-{zaid2}-{rx2}.npy"
-            file = os.path.join(cov_path, file_name)
-
-            # File that is the opposite transpose
-            file_name = f"{zaid2}-{rx2}-{zaid1}-{rx1}.npy" 
-            file_opposite = os.path.join(cov_path,  file_name)
-
-            # If the npy exists, otherwise, the matrix will stay as zeros
-            if os.path.exists(file):
-                M_sigma[iStart1:iEnd1, iStart2:iEnd2] = np.load(file)
-            elif os.path.exists(file_opposite):  # if the transpose matrix exists, load it and transpose it
-                M_sigma[iStart1:iEnd1, iStart2:iEnd2] = np.load(file_opposite).T
-            #else:
-            #    pass
-                #print('%s not found. Covariances set to 0' % file)
-
-    #TODO check positive semi-definite
-    # Loads a triangular matrix, need to make it symmetric
-    # M_sigma = M_sigma + M_sigma.T - np.diag(M_sigma)
-    #M_sigma = (M_sigma + M_sigma.T)/2.
-    M_sigma= deflate_sparse_matrix_eigen(M_sigma,300).toarray()#deflate_sparse_matrix(M_sigma,1000).toarray()
-    
-    return M_sigma
+def schrink_psd(matrix,tol=1):
+    M1=np.identity(len(matrix))
+    def S(a):
+        return a*M1+(1-a)*matrix
         
-        
-from scipy.sparse import csc_matrix
-from scipy.sparse.linalg import svds
+    al=0; ar=1
+    while ar-al>tol:
+        am=(al+ar)/2
+        if isPD(S(am)):
+            al=am
+        else:
+            ar=am
+    return S(ar)
 
 def deflate_sparse_matrix(sparse_matrix, k):
     """
@@ -322,51 +315,181 @@ def deflate_sparse_matrix(sparse_matrix, k):
     """
     # Perform SVD
     u, s, vt = svds(sparse_matrix, k=k,which="LM")
-    print(s)
 
     # Reconstruct the deflated matrix
     s_matrix = np.diag(s)
     deflated_matrix = u @ s_matrix @ vt
 
-    return csc_matrix(deflated_matrix)
+    return csc_matrix(deflated_matrix).toarray()
 
-def deflate_sparse_matrix_eigen(sparse_matrix, k):
+def nearest_pd(A):
+    """Find the nearest positive-definite matrix to input
+
+    A Python/Numpy port of John D'Errico's `nearestSPD` MATLAB code [1], which
+    credits [2].
+
+    [1] https://www.mathworks.com/matlabcentral/fileexchange/42885-nearestspd
+
+    [2] N.J. Higham, "Computing a nearest symmetric positive semidefinite
+    matrix" (1988): https://doi.org/10.1016/0024-3795(88)90223-6
+    """
+
+    B = (A + A.T) / 2
+    _, s, V = np.linalg.svd(B)
+
+    H = np.dot(V.T, np.dot(np.diag(s), V))
+
+    A2 = (B + H) / 2
+
+    A3 = (A2 + A2.T) / 2
+
+    if isPD(A3):
+        return A3
+
+    spacing = np.spacing(np.linalg.norm(A))
+    # The above is different from [1]. It appears that MATLAB's `chol` Cholesky
+    # decomposition will accept matrixes with exactly 0-eigenvalue, whereas
+    # Numpy's will not. So where [1] uses `eps(mineig)` (where `eps` is Matlab
+    # for `np.spacing`), we use the above definition. CAVEAT: our `spacing`
+    # will be much larger than [1]'s `eps(mineig)`, since `mineig` is usually on
+    # the order of 1e-16, and `eps(1e-16)` is on the order of 1e-34, whereas
+    # `spacing` will, for Gaussian random matrixes of small dimension, be on
+    # othe order of 1e-16. In practice, both ways converge, as the unit test
+    # below suggests.
+    I = np.eye(A.shape[0])
+    k = 1
+    while not isPD(A3):
+        mineig = np.min(np.real(np.linalg.eigvals(A3)))
+        A3 += I * (-mineig * k**2 + spacing)
+        k += 1
+
+    return A3
+
+def nearest_psd(matrix):
+    """Find the nearest Positive Semi-Definite (PSD) matrix to a given matrix."""
+    # Perform eigenvalue decomposition
+    matrix = (matrix + matrix.T) / 2
+
+    eigenvalues, eigenvectors = np.linalg.eigh(matrix)
+    
+    # Set negative eigenvalues to zero
+    eigenvalues[eigenvalues < 0] = 0
+    
+    # Reconstruct the matrix with non-negative eigenvalues
+    psd_matrix = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
+    
+    # Ensure symmetry (to counteract numerical errors)
+    #psd_matrix = (psd_matrix + psd_matrix.T) / 2
+    
+    return psd_matrix
+
+def psd_closeness(matrix):
+    """Calculate how close the matrix is to being PSD."""
+    # Ensure the matrix is symmetric
+    sym_matrix = (matrix + matrix.T) / 2
+    
+    # Perform eigenvalue decomposition
+    eigenvalues = np.linalg.eigvalsh(sym_matrix)
+    
+    # Identify negative eigenvalues
+    negative_eigenvalues = eigenvalues[eigenvalues < 0]
+    
+    # Calculate the sum of the absolute values of negative eigenvalues
+    closeness_metric = np.sum(np.abs(negative_eigenvalues))
+    
+    # Alternative metric: maximum negative eigenvalue (absolute value)
+    max_negative_eigenvalue = np.min(eigenvalues)
+    
+    # Output both metrics
+    return {
+        'sum_of_negative_eigenvalues': closeness_metric,
+        'max_negative_eigenvalue': max_negative_eigenvalue
+    }
+
+def deflate_sparse_matrix_eigen(sparse_matrix):
     """
     Deflates a symmetric sparse matrix using eigenvalue decomposition.
 
     Parameters:
     sparse_matrix (scipy.sparse.csc_matrix): Input symmetric sparse matrix.
-    k (int): Number of eigenvalues and eigenvectors to compute.
 
     Returns:
     scipy.sparse.csc_matrix: Deflated matrix.
     """
-    if not np.allclose(sparse_matrix, sparse_matrix.T):
-        raise ValueError("The input matrix must be symmetric for eigenvalue decomposition.")
+    sparse_matrix=(sparse_matrix+sparse_matrix.T)/2.
 
     # Perform eigenvalue decomposition
-    eigenvalues, eigenvectors = sla.eigs(sparse_matrix, k=k, which='LR')
-    print(eigenvalues,eigenvectors[-1])
+    eigenvalues, eigenvectors = np.linalg.eigh(sparse_matrix)
+    #eigenvectors=eigenvectors[:,1:]
+    #find the rayleigh quotient and the residual to find the bound of rounding error the bound is given by abs(lam_i-rho_i)+norm2(residual)
+    rayleigh_quotients=[]
+    residuals=[]
+    non_zero_indices = np.where(eigenvalues != 0)[0]
+    eigenvalues = eigenvalues[non_zero_indices]
+    eigenvectors = eigenvectors[:, non_zero_indices]
+    if True:
+        l=0
+        k=0
+        for i,x in enumerate(eigenvectors.T):
+            #find the parameter 
+            rq =  np.dot(x.T, np.dot(sparse_matrix, x))/np.dot(x.T, x)
+            rayleigh_quotients.append(rq)
+            residual = np.dot(sparse_matrix, x) - rq * x
+            residuals.append(residual)
+            #bound=np.abs(eigenvalues[i]-rq)+np.linalg.norm(residual) 
+        
+        for i,v in enumerate(eigenvalues):
+            diff=np.abs(v-rayleigh_quotients[i])
+            res_norm=np.linalg.norm(residual[i]) #norm 2
+            bound=diff+res_norm
+            g_list=[]
+            for j,rq in enumerate(rayleigh_quotients):
+                if i==0 and j==0 or j==1:
+                   g_list.append(np.abs(rayleigh_quotients[i]-rq)-res_norm)
+                if j==i-1 or j==i+1:
+                    g_list.append(np.abs(rayleigh_quotients[i]-rq)-res_norm)
+            g=np.min(g_list)
+            tight_bound=diff+res_norm**2/g
+            bound=np.min([bound,tight_bound])
+            if not eigenvalues[i]<0:
+                k+=1
+            if not v<-bound:
+                l+=1
+                eigenvalues[i]=0
 
+    
+    #bound=np.abs(eigenvalues-rayleigh_quotients)+np.linalg.norm(residuals)
+    # Set positive eigenvalues to zero to deflate the matrix of only the negative eigenvalues
+    #eigenvalues[eigenvalues > 0] = 0
+    mat_mul=eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
+    H=3*np.finfo(float).eps*mat_mul
     # Reconstruct the deflated matrix
-    deflated_matrix = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
+    deflated_matrix =sparse_matrix- mat_mul+H
+    
+    return csc_matrix(deflated_matrix).toarray()
 
-    return csc_matrix(deflated_matrix)
+def get_unc_covar(mat,S_nuc):
+    """propagate uncertainty through a matrix, but also propagate uncertainty from statistical origin in serpent
+    using the fact that var=sum_i(dA/dSi*var_si)^2 where A=S.TMS, then expand out and you get unc_stat=2*sqrt(S.TM var_S M.TS).
 
-# Example usage
-if __name__ == "__main__":
-    # Create a sample sparse matrix
-    data = np.array([1, 2, 3, 4, 5])
-    row_indices = np.array([0, 1, 2, 3, 4])
-    col_indices = np.array([0, 1, 2, 3, 4])
-    sparse_matrix = csc_matrix((data, (row_indices, col_indices)), shape=(5, 5))
+    mat (numpy.array): matrix of covariance
+    S_nuc (numpy.array): uncertainty.uarray containing stat uncertainty from serpent from sensitivity.
+    """
+    S_nom = unp.nominal_values(S_nuc)
+    S_std = unp.std_devs(S_nuc)
+    # Construct the diagonal matrix of variances
+    Sigma_S = np.diag(S_std**2)
+    # Compute S^T M
+    SM = S_nom @ mat
+    covar=SM @S_nom
+    # Compute the uncertainty in the scalar A = S^T M S
+    sigma_A = 2 * np.sqrt(SM @ Sigma_S @ SM.T)
+    return unp.uarray(covar,sigma_A)
 
-    print("Original Sparse Matrix:")
-    print(sparse_matrix.toarray())
-
-    # Deflate the sparse matrix
-    k = 2  # Number of singular values to keep
-    deflated_matrix = deflate_sparse_matrix(sparse_matrix, k)
-
-    print("\nDeflated Sparse Matrix:")
-    print(deflated_matrix.toarray())
+def isPD(matrix):
+    try:
+        # Attempt Cholesky decomposition
+        np.linalg.cholesky(matrix)
+        return True
+    except np.linalg.LinAlgError:
+        return False
