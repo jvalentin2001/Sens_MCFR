@@ -17,7 +17,9 @@ from uncertainties import unumpy as unp
 
 class MCFR():
     def __init__(self,e_cl,e_U_stock=0.1975,lib_cl="ENDF8",lib_all="ENDF8",pop=1e5,active=500,inactive=25,reactor_type="MCFR_C",get_flux=False,prefix=""):
-        """  
+        """  This is the abstract class MCFR from which Static, Burnup and Sensitivity class inhert. It create a directory based on the parameters given,
+        it reads the template files and parameter lists from properties.json, and the template files are custom for each type of subclass. 
+        
           Args:
             e_cl (float): Chlorine weight enrichment
             e_U_stock (float): Uranium stock (in line feeding) enrichment
@@ -50,6 +52,7 @@ class MCFR():
         path_lib="\"/global/home/groups/co_nuclear/serpent/xsdata/"
         self.label_lib={"ENDF7":{"mat":".09c","path":path_lib+"endfb7/sss_endfb7u.xsdata\""},"ENDF8":{"mat":".02c","path":path_lib+"endf8/endf8.xsdata\""},"LANL":{"mat":".02c","path":path_lib+"LANL_Cl35/LANL_Cl35.xsdata\""}}
         self.temp_salt=self.param["temp"] #temperature in K of the salt
+        self.temp_rest=self.temp_salt
         
         #data for composition 
         comp_fuel=[92235,92238,11023,17037,17035]
@@ -67,7 +70,7 @@ class MCFR():
         self.m_refl=np.array([x * int(str(y)[-3:]) for x, y in zip(n_refl, self.param["mat_refl"])])#  mass percentage relfector
         self.m_refl=self.m_refl/np.sum(self.m_refl)
         self.mat_refl=self.gen_mat_SERPENT(self.param["mat_refl"])
-        self.rho=np.array([self.param["rho_refl"],self.salt_density(),self.param["rho_clad"]]) #density in g/cm3 for reflector, salt, cladding 
+        self.rho=np.array([self.param["rho_refl"],salt_density(self.temp_salt),self.param["rho_clad"]]) #density in g/cm3 for reflector, salt, cladding 
         self.ratio_reffuel=np.array([0.85,0.1,0.05]) #volume percentage reflector, salt, cladding  in fuel reflector
         self.vol_salt=self.param["vol_salt"]
         self.units={"adens":"/b-cm","mdens": "g/cm3","a":"bq","ingTox":"Sv","inhTox":"Sv"}
@@ -77,7 +80,7 @@ class MCFR():
         self.batch_int=1
         self.folder_name=None
         self.file_name=None
-        self.out_path=None
+        #self.out_path=None
         self.exec_name=None
         self.template_folder="template"
         self.ssspath_template=os.path.join(self.template_folder,self.param["template"])
@@ -112,14 +115,6 @@ class MCFR():
             matname.append(str(mat)+add) 
             
         return matname
-    
-    def salt_density(self):
-        """generate density based on A-B*T(K) equation given in MCFR design
-        Returns:
-            float: density [g/cm^3]
-        """
-        rho=(4.2126e3-1.0686*self.temp_salt)*1e-3
-        return round(rho, 3-int(floor(log10(abs(rho))))-1)
     
     def gen_comp(self):
         """generate composition for all the different materials to be used in the input file
@@ -166,6 +161,8 @@ class MCFR():
         return N_salt, m_salt
     
     def gen_serpent(self):
+        """generate from the template serpent the output file
+        """
          #the placeholder names to be searched in template file
         sss_str=["Replacepop","Replacepath","ReplaceT","Replacelib","Replacevol","Replaceflux"]
         prefs=["r","f","c","s","rf",] #prefix for each material being reflector, fuel, clad, stock, reffuel
@@ -181,7 +178,7 @@ class MCFR():
             path_lib.append(self.label_lib[self.lib_all]["path"])
         
         #data to fill in material definition serpent
-        temp=[self.temp_salt,self.temp_salt,self.temp_salt,self.temp_salt,self.temp_salt] #temperature of refl, fuel, cladding, uranium stock, reflfuel
+        temp=[self.temp_rest,self.temp_salt,self.temp_rest,self.temp_rest,self.temp_rest] #temperature of refl, fuel, cladding, uranium stock, reflfuel
         rho=np.concatenate((-1*self.rho,[-1*self.rho[1]],[-1*self.rho_reffuel])) #density of ...
         # Mat card with the atomic or massique concentrations 
         mat=[np.vstack((self.mat_refl,-1*self.m_refl)).T,np.vstack((self.mat_salt,self.N_salt)).T,
@@ -205,6 +202,18 @@ class MCFR():
         return sss_str, variables
     
     def get_exec(self,time,nodes,partition):
+        """Generate from template the execute file
+
+        Args:
+            time (int): hours of simulation
+            nodes (int): number of nodes to run the simulation on
+            partition (str): name of the paritition to run the simulation on
+
+
+        Returns:
+            sss_str,variables: two arrays, one is the array including the tags to be replaced in the template, the second is the variables to replace
+            these tags with. This is used for the multiple simulation runs later on.
+        """
         #list the fillwords to be replaced in the template
         sss_str=["Name","REPLACEPART","REPLACEn","Replacetime","ReplaceCPU","REPLACESERPENT"]
 
@@ -218,6 +227,12 @@ class MCFR():
         return sss_str, variables
 
     def simu_wait(self,o_path,number=1):
+        """Make the rest of the python code wait for the end of the serpent simulation to run
+
+        Args:
+            o_path (str): path to the .o file where the simulation is running
+            number (int, optional): number of simulation run in a row in serpent, only applicable for MCFRs. Defaults to 1.
+        """
         def check_file_for_line(filename,number):
             """Check the given file for the specified line."""
             itter=0
@@ -271,6 +286,24 @@ class MCFR():
         with open(os.path.join(self.folder_name,filename), "w") as file:
             file.write("".join(saved_input))
 
+    def wipe(self):
+        """before running wipe all res files
+
+        Returns:
+            _type_: _description_
+        """
+        files = os.listdir(self.folder_name)
+        # Iterate through files and delete those starting with the specified prefix
+        for file in files:
+            if file.startswith(self.file_name+"_") or file.startswith(self.file_name+"."):
+                file_path = os.path.join(self.folder_name, file)
+                os.remove(file_path)
+        # os.system("nohup")
+        o_path=f"{self.out_path()}.o"
+        if os.path.exists(o_path):
+            os.remove(o_path)
+        return o_path
+    
     def run_serpent(self,nodes,partition,time):
         """run the generated SERPENT file
 
@@ -278,18 +311,20 @@ class MCFR():
             nodes (int, optional): number of nodes to be run on the cluster. Defaults to 1.
         """
          # List all files in the directory
-        files = os.listdir(self.folder_name)
         self.gen_exec(nodes=nodes,partition=partition,time=time)
-        # Iterate through files and delete those starting with the specified prefix
-        for file in files:
-            if file.startswith(self.file_name+"_") or file.startswith(self.file_name+"."):
-                file_path = os.path.join(self.folder_name, file)
-                os.remove(file_path)
-        # os.system("nohup")
-        o_path=f"{self.out_path}.o"
-        if os.path.exists(o_path):
-            os.remove(o_path)
-        os.system(f"cd {self.folder_name}; sbatch {self.exec_name} ")
+        o_path=self.wipe()
+        txt=""
+        if partition=="savio3_bigmem":
+            txt="--exclude=n.0038.savio3"
+        elif partition=="savio4_htc":
+            txt="--exclude=n0155.savio4,n0149.savio4"
+        elif partition=="savio4_gpu":
+            txt="--exclude=n0143.savio4,n0145.savio4"
+        elif partition=="savio3":
+            txt="--exclude=n0084.savio3,n0148.savio3" #n0148.savio3,
+
+            print(f"cd {self.folder_name}; sbatch {txt} {self.exec_name} ")
+        os.system(f"cd {self.folder_name}; sbatch {txt} {self.exec_name} ")
         self.simu_wait(o_path) 
                  
     def extract_res_m(self,variables):
@@ -302,8 +337,10 @@ class MCFR():
         Returns:
             list: the variable output (could be a single value if no burnup)
         """
-        resFile=f"{self.out_path}_res.m"
+        resFile=f"{self.out_path()}_res.m"
         res = serpentTools.read(resFile)
+        if isinstance(variables,str):
+            variables=[variables]
         var=[]
         for variable in variables:
             if len(res.resdata[variable])==2:
@@ -314,6 +351,14 @@ class MCFR():
         return np.array(var)
 
     def plot_pathgen(self,plot_dir):
+        """creates a folder if it doesn't already within the MCFR directory and returns the path to
+
+        Args:
+            plot_dir (str):  name of directory 
+
+        Returns:
+            str: total path to directory
+        """
         plot_path=os.path.join(self.folder_name,plot_dir)
         if not os.path.exists(plot_path):
             os.makedirs(plot_path)
@@ -324,18 +369,23 @@ class MCFR():
 
         BU_points (int,optional): the number of plots of spectrum you want. Default 1 for the first BU step or static case
         """
-        resFile=f"{self.out_path}_dep.m"
-        dep = serpentTools.read(resFile)
-        BU=dep.days/365
+        not_BU=True
+        if not (len(BU_years)==1 and BU_years[0]==0):
+            resFile=f"{self.out_path()}_dep.m"
+            dep = serpentTools.read(resFile)
+            BU=dep.days/365
+            not_BU=False
 
-        def find_nearest_index(number):
+        def find_nearest_index(number,not_BU):
+            if not_BU:
+                return 0
             nearest_index = np.abs(BU - number).argmin()
             return nearest_index
 
         plt.figure()
         for step in BU_years:
-            ind=find_nearest_index(step)
-            resFile=self.out_path+f"_det{ind}.m"
+            ind=find_nearest_index(step,not_BU)
+            resFile=self.out_path()+f"_det{ind}.m"
             res=serpentTools.read(resFile,reader="det")
             data=res.detectors["flux"]
             E=data.grids["E"][:,1]
@@ -351,18 +401,27 @@ class MCFR():
         plt.xscale('log')
         plt.yscale('linear')
         plt.xlabel("Energy [MeV]")
-        plt.ylabel("flux [cm$^{-2}$s$^{-1}$]")
-        plt.title(f'Evolution of flux for ${{\lambda_{{in}}}}$={self.mflow_in} /s, Cl_e={self.e_cl*100} w%',fontsize = 10)
+        plt.ylabel("flux per unit lethargy [cm$^{-2}$s$^{-1}$]")
+        #plt.title(f'Evolution of flux for ${{\lambda_{{in}}}}$={self.mflow_in} /s, Cl_e={self.e_cl*100} w%',fontsize = 10)
         plt.grid()
-        plt.legend()
-        plt.savefig(os.path.join(self.folder_name,plot_dir,f"flux_{self.file_name}.png"))
+        if not_BU:
+            plt.legend()
+        plt.savefig(os.path.join(self.folder_name,plot_dir,f"flux_{self.file_name}.png"),dpi=400)
         plt.close()
         
         return unp.uarray(flux,flux_s*flux),E,flux_tot
+    
+    def out_path(self):
+        return os.path.join(self.folder_name,self.file_name)
 
 
 class Static(MCFR):
     def __init__(self,e_cl,e_U_stock=0.1975,lib_cl="ENDF8",lib_all="ENDF8",pop=1e5,active=500,inactive=25,reactor_type="MCFR_C",get_flux=False,prefix=""):
+        
+        """No new variables with respect to MCFR abstract class however with this class a simulation can actually be ran, when initialised a Static calcuation 
+        Serpent input file will be generated. This can then be run by hand, or through the run() function which will run it on a cluster. Then required data can be extracted
+        with the extract_res_m() function.
+        """
         #initialise the mother class MCFR
         super().__init__(e_cl,e_U_stock,lib_cl,lib_all,pop,active,inactive,reactor_type,get_flux,prefix)
         
@@ -375,14 +434,12 @@ class Static(MCFR):
         if not os.path.exists(self.folder_name):
             os.makedirs(self.folder_name) 
         self.file_name=f"{self.prefix}Cl_{self.e_cl}.txt"
-        self.out_path=os.path.join(self.folder_name,self.file_name)
+        #self.out_path=os.path.join(self.folder_name,self.file_name)
         self.template_path=os.path.join(self.template_folder,"temp_execute.sub")
         self.gen_serpent()    
         
     def gen_serpent(self):
         sss_str,variables=super().gen_serpent()
-        
-
         self.write_to_file(sss_str,variables,self.ssspath_template,self.file_name)
         
     def gen_exec(self,time=0.5,nodes=1, partition="savio3"):
@@ -403,7 +460,7 @@ class Static(MCFR):
         
     def extract_flux(self,plot_dir=""):
         "output flux per unit lethargy"
-        resFile=self.out_path+f"_det0.m"
+        resFile=self.out_path()+f"_det0.m"
         res=serpentTools.read(resFile,reader="det")
         data=res.detectors["flux"]
         E=data.grids["E"][:,1]
@@ -417,11 +474,12 @@ class Static(MCFR):
         plt.xscale('log')
         plt.yscale('linear')
         plt.xlabel("E [eV] ")
-        plt.ylabel("flux per unit lethargy [n.cm$^{-2}$s$^{-1}$]")
-        plt.title(f'Evolution of flux for Cl_e={self.e_cl*100} w%',fontsize = 10)
+        plt.legend()
+        plt.ylabel("Flux per unit lethargy [n.cm$^{-2}$s$^{-1}$]")
+        #plt.title(f'Evolution of flux for Cl_e={self.e_cl*100} w%',fontsize = 10)
         plt.grid()
         plot_path=self.plot_pathgen(plot_dir)        
-        plt.savefig(os.path.join(plot_path,f"flux_{self.file_name}.png"))
+        plt.savefig(os.path.join(plot_path,f"flux_{self.file_name}.png"),dpi=400)
         plt.close()
         
         return unp.uarray(flux,flux_s*flux),E,flux_tot
@@ -429,19 +487,17 @@ class Static(MCFR):
 
 class Depletion(MCFR):
     def __init__(self,mflow_in,mflow_out=None,e_cl=0.75,e_U_stock=0.1975,lib_cl="ENDF8",lib_all="ENDF8",pop=1e5,active=500,inactive=25,reactor_type="MCFR_C",get_flux=False,prefix="",BU_years=60,restart=False):
-        """_summary_
+        """Adds 4 new variables in order to run MCFR burnup, being the mflow_in, mflow_out, BU_years, restart. 
 
         Args:
             mflow_in (float): mflow rate inside 
-            mflow_out (float, optional): mflow rate in over flow system. Defaults to None.
+            mflow_out (float, optional): mflow rate in over flow system in order to keep mass constant if set to None, i.e. is not known, 
+            Then a little simulation will be run in order to find the gas mass flow rate from which outflow will be calculated. Defaults to None.
             e_cl (float): Chlorine weight enrichment
-            e_U (float): Uranium weight enrichment
-            U_cl_split (float): molar compsotion of UCl3-NaCl
             e_U_stock (float): Uranium stock (in line feeding) enrichment
             lib_cl (str, optional): Nuclear library for Cl35 . Defaults to "ENDF8".
             lib_all (str, optional): Nuclear library for all the other isotopes. Defaults to "ENDF8".
             BU_years (float,optional): Number of Burnup years to be run. Defaults to 30 years
-            temp (int, optional): temperature in K. Defaults to 973.15K.
             pop (int, optional): neutron population. Defaults to 1e5.
             active (int, optional): number of active batche. Defaults to 1e3.
             inactive (int, optional): number of inactive batches. Defaults to 50.
@@ -464,7 +520,7 @@ class Depletion(MCFR):
         if not os.path.exists(self.folder_name):
             os.makedirs(self.folder_name) 
         self.file_name=f"{self.prefix}Cl_{self.e_cl}_mflow_{self.mflow_in}.txt"
-        self.out_path=os.path.join(self.folder_name,self.file_name)
+        #self.out_path=os.path.join(self.folder_name,self.file_name)
         self.template_path=os.path.join(self.template_folder,"temp_execute.sub")
         
         if self.mflow_out is None:
@@ -513,7 +569,7 @@ class Depletion(MCFR):
     def extract_dep_m(self,isotopes,variable,plot_dir="",do_plot=True,logy=True):
         """
         Extracts the evolution of the composition of the specified isotope in the fuel
-        in function of burnup from a SERPENT results file.
+        in function of burnup from the SERPENT dep file
 
         Parameters:
             results_file (str): Path to the SERPENT results file (.res).
@@ -522,18 +578,27 @@ class Depletion(MCFR):
         Returns:
             Tuple of arrays: Tuple containing burnup values and composition of the isotope.
         """
-        
-        resFile=f"{self.out_path}_dep.m"
+        def removemin(list_str):
+            new_list=[]
+            for i in list_str:
+                if "-" in i:
+                    Z,A=i.split("-")
+                    new_list.append(f"{Z}{A}")
+                else:
+                    new_list.append(i)
+            return new_list 
+        isotopes=removemin(isotopes)
+        resFile=f"{self.out_path()}_dep.m"
         dep=serpentTools.read(resFile)
         plot_path=self.plot_pathgen(plot_dir)
         fuel=dep.materials["fuel"]
         unit=self.units[variable]     
         BU = dep.days
-        compositions = [fuel.getValues("days",variable,names=isotope) for isotope in isotopes] #{isotope: fuel.getValues("days",variable,names=isotope) for isotope in isotopes}
+        compositions = [fuel.getValues("days",variable,names=isotope)[0] for isotope in isotopes] #{isotope: fuel.getValues("days",variable,names=isotope) for isotope in isotopes}
         if do_plot:
             plt.figure()
             for i in range(len(isotopes)):
-                plt.plot(BU/365, compositions[i][0], label=isotopes[i])
+                plt.plot(BU/365, compositions[i], label=isotopes[i])
                 #plt.plot(BU[:-1]/365, np.diff(compositions[i][0])/np.diff(BU/365),label=isotopes[i])
                 #plt.fill_between(BU,compositions[i][0]-compositions[i][1],compositions[i][0]+compositions[i][1],alpha=0.4)
             if logy:
@@ -552,7 +617,7 @@ class Depletion(MCFR):
         return compositions, BU
 
     def extract_res_m(self,var_names,plot_dir="",do_plot=True):
-        resFile=f"{self.out_path}_dep.m"
+        resFile=f"{self.out_path()}_dep.m"
         dep=serpentTools.read(resFile)
         plot_path=self.plot_pathgen(plot_dir)
         BU=dep.days
@@ -570,7 +635,7 @@ class Depletion(MCFR):
                 plt.fill_between(BU/365,var[j,:,0]-var[j,:,1],var[j,:,0]+var[j,:,1],alpha=0.4)
             plt.grid()
             title=f"Macro variables for {self.lib_cl}/{self.lib_all} with Cl37={self.e_cl}w% & ${{\lambda_{{in}}}}$={self.mflow_in} /s"
-            plt.title(title,fontsize=10)
+            #plt.title(title,fontsize=10)
             plt.xlabel('Burnup years')
             if not len(var_names)==1:
                 plt.ylabel("a.u.")
@@ -620,13 +685,13 @@ class Depletion(MCFR):
 
 
 class Sensitivity(MCFR):
-    def __init__(self,sens_iso="all",sens_MT="all_MT",sens_resp="keff",mflow_in=None,mflow_out=None,equi_comp=False,e_cl=0.75,e_U_stock=0.1975,lib_cl="ENDF8",lib_all="ENDF8",pop=1e5,active=500,inactive=50,reactor_type="MCFR_C",get_flux=False,prefix="",BU_years=60):
+    def __init__(self,sens_iso="all",sens_MT="all_MT",sens_resp="keff",mflow_in=None,mflow_out=None,equi_comp=False,e_cl=0.75,e_U_stock=0.1975,lib_cl="ENDF8",lib_all="ENDF8",pop=1e5,active=500,inactive=50,batch_int=30,reactor_type="MCFR_C",get_flux=False,prefix="",BU_years=60):
         """_summary_
 
         Args:
             sens_iso (list or int or str): isotopes of interest for sensitivity analysis if list in zaid format (dont forget 0 at the end for ground state), if int number of isotopes in decreasing adens, if all use all isotopes. default all
             sens_MT (list): Reactions of interest for sensitivity analysis, can be a list of MT number or sum reactions, or "all" for all sum reactions, or "all_MT" for all relevant MT numbers. default to all.
-            sens_resp (str, optional): parameter to investigate the sensitivity. Defaults to "keff".
+            sens_resp (str, optional): parameter to investigate the sensitivity, can be "void" as well for the void coefficient. Defaults to "keff".
             equi_comp (bool, optional): Whether you are looking at initial composition (False) or equilibrium composition (True). Defaults to False.
             other parameters described in other class definitions
         """
@@ -651,7 +716,7 @@ class Sensitivity(MCFR):
         add_txt=""
         if self.equi_comp:
         #create instance of Depletion to obtain the restart file to be read and used for sensitivity if looking at equilibirum concentration
-            dep=Depletion(mflow_in,mflow_out,e_cl,e_U_stock,lib_cl,lib_all,1e5,100,25,reactor_type,get_flux,prefix+"sens_",BU_years,restart=True)
+            dep=Depletion(mflow_in,mflow_out,e_cl,e_U_stock,lib_cl,lib_all,5e5,200,25,reactor_type,get_flux,prefix+"sens_",BU_years,restart=True)
             self.restart_file=dep.file_name+".wrk"
             #if restart file doesn't exist run depletion
             if not os.path.exists(os.path.join(self.folder_name,self.restart_file)):
@@ -659,9 +724,9 @@ class Sensitivity(MCFR):
                 dep.run_serpent(nodes=8,partition="savio4_htc")
             dep.extract_dep_m(["total"],"mdens","plot")
             add_txt="equi"
-            resFile=f"{dep.out_path}_dep.m"
+            resFile=f"{dep.out_path()}_dep.m"
             dep=serpentTools.read(resFile)
-            fuel=dep.materials["fuel"]
+            fuel=dep.materials["total"] #TOTAL change!!!!!!
             names=fuel.zai
             iso=fuel.adens
             names = [str(num)  for num in names]
@@ -677,7 +742,7 @@ class Sensitivity(MCFR):
 
         elif sens_iso=="all":
             if equi_comp:
-                #if "all" option selected for isotopes take top 50 isotopes from the equilibrium composition
+                #if "all" option selected for isotopes take top 70 isotopes from the equilibrium composition
                 self.sens_iso=self.iso_list_sorted[:70,1]
                 #self.sens_iso=np.append(self.sens_iso,["80160"])
                 index = np.where(self.sens_iso=="0")
@@ -691,7 +756,8 @@ class Sensitivity(MCFR):
         else:
             raise ValueError("Make sure the sens_iso variable is either a list, an int, or the str all,")
         
-        self.batch_int=30
+        self.batch_int=batch_int
+        #make sure batch interval multiple of active cycle otherwise SERPENT crash.
         while self.batch_int<self.active:
             if self.active%self.batch_int==0:
                 break
@@ -704,7 +770,7 @@ class Sensitivity(MCFR):
         self.zaid_MT_intEsens = None #the list of sensitivity for the integrated energy sensitivities in the format [[zaid1,RX1,sens11, sens11_s],[zaid1,RX2,sens12,sens12_s],...]
 
         self.file_name=f"{self.prefix}sens{add_txt}_{self.sens_resp}_{len(self.sens_iso)}iso{self.str_MT}.txt"
-        self.out_path=os.path.join(self.folder_name,self.file_name)
+        #self.out_path=os.path.join(self.folder_name,self.file_name)
         self.template_path=os.path.join(self.template_folder,"temp_execute.sub")
 
         self.gen_serpent()
@@ -765,11 +831,14 @@ class Sensitivity(MCFR):
         else:
             raise ValueError("Invalid sens_MT argument.")
 
-    def gen_serpent(self):
-            
+    def gen_serpent(self):   
         sss_str,variables= super().gen_serpent()  
+        if self.sens_resp=="void":
+            response="void fuel"
+        else:
+            response=self.sens_resp
         sss_str=np.concatenate((sss_str,["Replaceresp","Replacezailist","Replacemtlist","Replacefilerestart","ReplaceBU"]))
-        variables=np.concatenate((variables,[self.sens_resp,array_txt(self.sens_iso),self.sssinput_MT,"",""]))
+        variables=np.concatenate((variables,[response,array_txt(self.sens_iso),self.sssinput_MT,"",""]))
         if self.equi_comp:
             variables[-2]=f"set rfr continue {self.restart_file}"
             #single burnup step just to load nuclear data in memory, in practice only final BU step used from restart file used.
@@ -778,7 +847,7 @@ class Sensitivity(MCFR):
         template_path=[self.ssspath_template,os.path.join(self.template_folder,"temp_sens")]
         self.write_to_file(sss_str,variables,template_path,self.file_name)
  
-    def gen_exec(self,time=30,nodes=1, partition="savio3"):
+    def gen_exec(self,time=30,nodes=1, partition="savio3_bigmem"):
         """generate execute file
 
         Args:
@@ -809,9 +878,9 @@ class Sensitivity(MCFR):
         conv={"mt 452 xs":"nubar total", "mt 455 xs": "nubar delayed", "mt 456 xs": "nubar prompt","mt 1018 xs": "chi total"}
         
         if not integralE:
-            ks=self.sens_file.sensitivities["keff"]
+            ks=self.sens_file.sensitivities[self.sens_resp]
         else:
-            ks=self.sens_file.energyIntegratedSens["keff"]
+            ks=self.sens_file.energyIntegratedSens[self.sens_resp]
         if not isinstance(zai,int):
             if zai=="total":
                 pass
@@ -837,24 +906,31 @@ class Sensitivity(MCFR):
         unc = np.abs(kslice[:, 1]  * value)
         return value, unc
      
-    def extract_sens_m(self,zais="all",perts=["2","4","102","103","107","16","18","452"],plot_dir="",do_plot=False):
+    def extract_sens_m(self,zais="all",perts=["2","4","102","103","107","16","18","452","1018"],plot_dir="",do_plot=False):
         """extract the sensitivity data for pair of zais pert
 
         Args:
             zais (list): list of isotopes, either zaid or Cl-35 format
-            pert (list): perturbation, that being MT number or name of sum reaction, goes in pair with zais (i.e. zai=[922380, 922380] or ["2","16"])
+            pert (list): perturbation, that being MT number 
             plot_dir (str, optional): directory towards which to plot. Defaults to "".
             do_plot (bool, optional): whether or not to plot. Defaults to True.
 
         Returns:
             _type_: _description_
+            
         """
-        self.sens_file=serpentTools.read(f"{self.out_path}_sens0.m")
+        self.sens_file=serpentTools.read(f"{self.out_path()}_sens0.m")
         self.pert_list=list(self.sens_file.perts.keys())
         if isinstance(zais,str) and zais=="all":
             zais=self.sens_iso
+        elif not isinstance(zais,list) and not isinstance(zais,np.ndarray):
+            zais=[zais]
         if isinstance(perts,str) and perts=="all":
             perts=self.pert_list
+        elif not isinstance(perts,list) and not isinstance(perts,np.ndarray):
+            print(type(perts))
+            perts=[perts]
+            perts=MT_to_serpent_MT(perts)
         else:
             perts=MT_to_serpent_MT(perts)
         
@@ -864,14 +940,21 @@ class Sensitivity(MCFR):
         self.zaid_MT_intEsens = []
         for i in zais:
             for j in perts:
-                value,unc=self.get_adjsens(i,j)
+                if self.lib_cl=="ENDF8" and self.reactor_type=="MCFR_D" and j=="mt 1018 xs":
+                    value=np.zeros_like(value)
+                    unc=np.zeros_like(unc)
+                    value_int=0
+                    unc_int=0
+                else:   
+                    value,unc=self.get_adjsens(i,j)
+                    value_int,unc_int=self.get_adjsens(i, j,integralE=True)
                 if not (i=="total" or j=="total xs"):
                     self.sens.append(value)
                     self.sens_s.append(unc)
                     #generate a list of format [[zaid1,n1],[zaid1,n2],...].
                     self.zaid_MT.append([i, j.split()[1]])
                 #combine the zaid_MT list format with the inegralE sensitivity coefficient with abs uncertainty
-                self.zaid_MT_intEsens.append([ zai_to_nuc_name(i),str(sssmtlist_to_RXlist( [j])[0]),*self.get_adjsens(i, j,integralE=True)])
+                self.zaid_MT_intEsens.append([ zai_to_nuc_name(i),str(sssmtlist_to_RXlist( [j])[0]),value_int,unc_int])
         # plotting energy dependent sensitivity profile
         self.sens=np.array(self.sens)
         self.sens_s=np.array(self.sens_s)
@@ -905,8 +988,9 @@ class Sensitivity(MCFR):
             plt.legend()
             plt.xlabel("Energy (eV)")
             plt.ylabel("Sensitivity per unit lethargy")
-            plt.title(f"K-eff sensitivity")
-            plt.savefig(os.path.join(plot_path,f"sens_iso{len(zais)}_pert{len(perts)}_MT{perts}"),dpi=400)
+            #plt.title(f"K-eff sensitivity")
+            plt.tight_layout()
+            plt.savefig(os.path.join(plot_path,f"sens_{self.sens_resp}_iso{len(zais)}_pert{len(perts)}_MT{perts}"),dpi=400)
         return self.sens,self.sens_s,self.sens_file.energies,self.sens_file.lethargyWidths
     
     def check_run_extract(self):
@@ -969,7 +1053,7 @@ class Sensitivity(MCFR):
                 if self.equi_comp:
                     plt.title(f'Equilibrium composition sensitivity for {title_str} with {rank_sens[0,1]} xs')
                 else:
-                    plt.title(f'initial composition sensitivity of {title_str} to {rank_sens[0,1]} xs')
+                    plt.title(f'Initial composition sensitivity of {title_str} to {rank_sens[0,1]} xs')
             elif isotope is not None:
                 #find the first index which is 0 or is 100 times smaller than the max, exclude the rest of the array from that point for the plot
 
@@ -990,10 +1074,10 @@ class Sensitivity(MCFR):
                 plt.bar(name, np.float64(rank_sens_rm[:ind_0,2]),yerr=np.float64(rank_sens_rm[:ind_0,3]),bottom=0,align="center", alpha=0.7)
                 plt.xlabel('Isotope')
                 plt.ylabel('Sensitivity')
-                if self.equi_comp:
-                    plt.title('Equilibrium composition sensitivity')
-                else:
-                    plt.title('initial composition sensitivity')
+                # if self.equi_comp:
+                #     plt.title('Equilibrium composition sensitivity')
+                # else:
+                #     plt.title('Initial composition sensitivity')
                 reaction="all"
                 
             plt.xticks(rotation=45, ha='right')
@@ -1004,7 +1088,7 @@ class Sensitivity(MCFR):
             if isotope is None:
                 isotope=""   
             plt.savefig(os.path.join(plot_path,f"rank_bar_{reaction}{isotope}.png"))
-        return rank_sens
+        return rank_sens,ind_0
      
     def remove_iso_MT(self,array,iso_remove=None,MT_remove=None):
         """remove all the rows with 
@@ -1086,7 +1170,8 @@ class Sensitivity(MCFR):
         abs_sens=np.array(sorted(zip(self.sens_iso,sum_list,sum_list_s),key=lambda x: float(x[1]),reverse=True))
         name=[]
 
-        ind_0=  next((index for index, value in enumerate(np.float64(abs_sens[:,1])) if (value == 0 or np.abs(value/np.max(np.abs(np.float64(abs_sens[:,1]))))<1e-3)), None)
+        #only select isotopes-reaction pairs that are up to 1000 times smaller than the biggest value
+        ind_0=  next((index for index, value in enumerate(np.float64(abs_sens[:,1])) if (value == 0 or np.abs(value/np.max(np.abs(np.float64(abs_sens[:,1]))))<5e-4)), None)
         for i in abs_sens[1:ind_0,0]:
             name.append(zai_to_nuc_name(i))
         plt.bar(name, np.float64(abs_sens[1:ind_0,1])/np.float64(abs_sens[0,1])*100,bottom=0,align="center", alpha=0.7)
@@ -1205,13 +1290,14 @@ class Sensitivity(MCFR):
         #print(f"sum of frobenius distance changed in the covariance matrices {np.sum(sum),np.max(sum)}")
         return M_sigma
             
-    def error_prop(self,limit=True):
+    def error_prop(self,limit=True,plot_mat=False,plot_pre=""):
         """propagate error with covariance matrix and sensitivity vector using the sandwidch rule, 
         if 
 
         Args:
             limit (bool,optional): if true above a limit of 250 zaid_MT pairs will find the most sensitive isotopes to select
             using the absolute senstivity sum, taking the the isotopes which are up to 1000 times smaller than the total 
+            plot_mat: whether or not to plot the covariance difference matrix
 
 
         Returns:
@@ -1229,16 +1315,18 @@ class Sensitivity(MCFR):
                 
         if  len(self.zaid_MT)>250 and limit:
             #if there are too many zaid_MT pairs then the matrix will become too big for computation and compute very
-            #irelavant isotopes, thus a selection of the most sensitive isotope are taken
+            #irelavant isotopes, thus a selection of the most sensitive isotope are taken, those with a factor 1000 or less are kept 
+            # compared to biggest sensitivity
             abs_sens,ind0=self.abs_contribution_iso()
             unique_MT=np.unique(self.zaid_MT[:,1])
-            self.extract_sens_m(abs_sens[1:ind0,0],perts=unique_MT)
+            #for the most sensitive
+            self.extract_sens_m(abs_sens[:ind0,0],perts=unique_MT)
     
 
         flat_sens=self.sens.flatten()
         flat_sens_s=self.sens_s.flatten()
         flat_sens=unp.uarray(flat_sens,flat_sens_s)
-        
+
         cov=self.get_ND_cov_matrix()
         modified_cov=copy.deepcopy(cov)
         
@@ -1250,61 +1338,74 @@ class Sensitivity(MCFR):
         csv_data=[]
         for row1 in self.zaid_MT:
             zaid1 = row1[0][:-1]
+            if int(zaid1)%1000==0:
+                #if natural composition isotope skip since no covariance
+                continue
             if zaid1 not in zaid_finished:
                 for row2 in self.zaid_MT[:]:
                     if zaid1 == row2[0][:-1]:
                         iEnd += self.NEG
                 zaid_finished.append(zaid1)
-
                 S_nuc = flat_sens[iStart:iEnd]
                 M_sigma_rel_nuc = cov[iStart:iEnd,iStart:iEnd]  
-                 
+                iso=zai_to_nuc_name( str(zaid1+"0"))
                 # Then calculate covar
                 if  not isPD(M_sigma_rel_nuc):
                     #if not PSD tranform it to PSD
                     M_sigma_rel_nuc_PSD=deflate_sparse_matrix_eigen(M_sigma_rel_nuc)
-                    
-                    #find the difference matrix between the original and the corrected PSD
                     diff=M_sigma_rel_nuc-M_sigma_rel_nuc_PSD
-                    plotpath=self.plot_pathgen("cov_matrix")
-                    #plot of this diff matrix
-                    plt.figure()
-                    iso=zai_to_nuc_name( str(zaid1+"0"))
-                    #plt.title(f"{iso} Cov. relative difference wrt. deflation")
-                    plt.title(f"{iso} Magnitude of Covariance")
-                    vmax = np.max(np.abs(diff))
-                    img = plt.imshow(M_sigma_rel_nuc,interpolation="nearest")
-                    #img = plt.imshow(diff/M_sigma_rel_nuc*100, cmap='bwr',interpolation="nearest",vmin=-vmax,vmax=vmax)#diff/M_sigma_rel_nuc*100
-                    #plt.colorbar(img,label="relative difference [%] ")
-                    plt.colorbar(img,label="Magnitude")
-                    num=int((iEnd-iStart)/self.NEG)
-                    tick_positions=np.arange(0, num*self.NEG, self.NEG)
-                    plt.xticks(tick_positions-1)
-                    plt.yticks(tick_positions-1)
-                    #Set minor ticks at positions halfway between major ticks for the isotope names
-                    minor_tick_positions = tick_positions + (tick_positions[1]-tick_positions[0]) / 2.
-                    plt.gca().xaxis.set_minor_locator(FixedLocator(minor_tick_positions))
-                    plt.gca().set_xticklabels(MTtoRX(self.zaid_MT[:num,1]), minor=True, rotation=25, ha='center')
-                    plt.gca().yaxis.set_minor_locator(FixedLocator(minor_tick_positions))
-                    plt.gca().set_yticklabels(MTtoRX(self.zaid_MT[:num,1]), minor=True, rotation=0)
-                    plt.gca().tick_params(axis='both', which='major', length=0, labelsize=0)
-                    plt.grid()
-                    plt.tight_layout()
-                    plt.savefig(os.path.join(plotpath,f"{zaid1}_cov.png"))
-                    plt.close()
+                    if plot_mat:
+                        #find the difference matrix between the original and the corrected PSD and plot it
+                        plotpath=self.plot_pathgen("cov_matrix")
+                        #plot of this diff matrix
+                        plt.figure()
+                        
+                        #img = plt.imshow(M_sigma_rel_nuc,interpolation="nearest")
+                        # rel_diff=diff/M_sigma_rel_nuc*100
+                        # rel_diff=np.nan_to_num(rel_diff,nan=0,posinf=100,neginf=-100)
+                        vmax = np.max(np.abs(diff))
+                        if vmax==0:
+                            img=plt.imshow(diff, cmap='bwr',interpolation="nearest")
+                        else:
+                            img = plt.imshow(diff, cmap='bwr',interpolation="nearest",norm=matplotlib.colors.SymLogNorm(vmax/100,vmin=-vmax,vmax=vmax))#,vmin=-vmax,vmax=vmax)#diff/M_sigma_rel_nuc*100
+                        plt.colorbar(img,label="Difference")
+                        #plt.colorbar(img,label="Magnitude")
+                        num=int((iEnd-iStart)/self.NEG)
+                        tick_positions=np.arange(0, num*self.NEG, self.NEG)
+                        plt.xticks(tick_positions-1)
+                        plt.yticks(tick_positions-1)
+                        
+                        #Set minor ticks at positions halfway between major ticks for the isotope names
+                        minor_tick_positions = tick_positions + (tick_positions[1]-tick_positions[0]) / 2.
+                        plt.gca().xaxis.set_minor_locator(FixedLocator(minor_tick_positions))
+                        plt.gca().set_xticklabels(MTtoRX(self.zaid_MT[:num,1]), minor=True, rotation=25, ha='center')
+                        plt.gca().yaxis.set_minor_locator(FixedLocator(minor_tick_positions))
+                        plt.gca().set_yticklabels(MTtoRX(self.zaid_MT[:num,1]), minor=True, rotation=0)
+                        plt.gca().tick_params(axis='both', which='major', length=0, labelsize=0)
+                        plt.grid()
+                        plt.tight_layout()
+                        plt.savefig(os.path.join(plotpath,f"{zaid1}_diff_cov.png"),dpi=400)
+                        plt.close()
                 else:
                     M_sigma_rel_nuc_PSD=M_sigma_rel_nuc
+                
+                # add the corrected block and replace it into the total covariance matrix,
                 modified_cov[iStart:iEnd,iStart:iEnd] =M_sigma_rel_nuc_PSD
                 
+                # Get the resulting propagated covariance along with the propagated statistical uncertainy from SERPENT for not and PSD matrix
+                covar = get_unc_covar(M_sigma_rel_nuc_PSD,S_nuc)
 
-                covar = S_nuc.dot(M_sigma_rel_nuc_PSD).dot(S_nuc.T)
-                covar_notPSD= S_nuc.dot(M_sigma_rel_nuc).dot(S_nuc.T)
+                covar_notPSD=get_unc_covar(M_sigma_rel_nuc,S_nuc)
                 covar_dict[iso] = covar
+                
+                #write this into a CSV file with name of isotope, original matrix's sum of neg. eigenvalues, same for the PSD corrected one,
+                # The relative Frobenius difference between the two, then the uncertainty for both these cases,
+                #after this loop will be added the relative contribution to the variance of the PSD uncertainty
                 csv_data.append([iso,format(psd_closeness(M_sigma_rel_nuc)["sum_of_negative_eigenvalues"],".4e"),format(psd_closeness(M_sigma_rel_nuc_PSD)["sum_of_negative_eigenvalues"],".4e"),
-                                format(np.linalg.norm(diff,"fro")/ np.linalg.norm(M_sigma_rel_nuc, 'fro')*100,".4e"),unp.sqrt(covar_notPSD)*1e5,unp.sqrt(covar)*1e5])
+                                format(np.linalg.norm(diff,"fro")/ np.linalg.norm(M_sigma_rel_nuc, 'fro')*100,".4e"),unp.sqrt(covar_notPSD)*1e5 if covar_notPSD>0 else -unp.sqrt(-covar_notPSD)*1e5,unp.sqrt(covar)*1e5])
                 iStart = iEnd
             iNuc += 1
-        
+
         if self.equi_comp:
             temp_str="equilibrium"
         else:
@@ -1312,21 +1413,31 @@ class Sensitivity(MCFR):
         #save the covariance data as well as the PSD covariance matrix
         self.PSD_cov=modified_cov  
         self.mat_cov=cov
-        #get total uncertainty from all the reactions
-        unc_tot_PSD=flat_sens.dot(modified_cov).dot(flat_sens.T)
-        unc_tot=flat_sens.dot(self.mat_cov).dot(flat_sens.T)
-        csv_data.append(["total",format(psd_closeness(self.mat_cov)["sum_of_negative_eigenvalues"],".4e"),format(psd_closeness(self.PSD_cov)["sum_of_negative_eigenvalues"],".4e"),
+        #get total uncertainty from all the reactions for PSD and not PSD
+        unc_tot_PSD=get_unc_covar(self.PSD_cov,flat_sens)
+        unc_tot=get_unc_covar(self.mat_cov,flat_sens)
+        
+        #Write this into the CSV file from earlier for the total uncertainty
+        csv_data.append(["total","-","-",
                                 format(np.linalg.norm(self.PSD_cov-self.mat_cov,"fro")/ np.linalg.norm(self.mat_cov, 'fro')*100,".4e"),unp.sqrt(unc_tot)*1e5,unp.sqrt(unc_tot_PSD)*1e5])
-        temp=os.path.join(self.folder_name,f"PSD_uncertainty_{temp_str}.csv")
+        
+        temp=os.path.join(self.folder_name,f"{plot_pre}{self.sens_resp}_PSD_uncertainty_{temp_str}.csv")
+        
+        #actually write this array into a csv
         csv_write=open(temp, "w", newline='') 
         writer = csv.writer(csv_write)
         writer.writerow(["Isotope","Sum_-ve_eigen_origin","Sum_-ve_eigen_corrected","Fro_rel_dist PSD to original [%]","Uncertainty not PSD [pcm]", "Uncertainty PSD [pcm]","Rel unc contribution PSD [%]"])
+        
+        #calculate the relative contribution to the total uncertainty (with respect to the variance and not uncertainty)
         for i,row in enumerate(csv_data):
             relative_contribution = (row[-1]/1e5)**2 / unc_tot_PSD*100
             csv_data[i].append(relative_contribution)
         csv_data=np.array(csv_data)
+        
+        #sort in decreasing order with respect to relative contribution
         csv_data = csv_data[np.argsort(csv_data[:, -1])[::-1],:]
 
+        #save into csv file
         writer.writerows(csv_data)
         csv_write.close()
         print(f"The following file has been written {temp}")
@@ -1351,9 +1462,9 @@ class Sensitivity(MCFR):
                 true_cov = np.sqrt(covar_dict[true_key])*1e5
                 ranking.append([true_key, true_cov])
 
-        #rank per reactions with relative contribution per isotope to the variance
+        ############# rank per reactions with relative contribution per isotope to the variance
         ranking_rel=self._var_decomp_rx()
-        ranking_rel_dic = {} # create a dictionary in the which can take isotope and a reaction to get the relative contribution to the variance
+        ranking_rel_dic = {} # create a dictionary in that can take isotope and a reaction to get the relative contribution to the variance
     
         for item in ranking_rel:
             isotope_reaction, value = item
@@ -1370,9 +1481,10 @@ class Sensitivity(MCFR):
         color_map={}
         unique_MT=np.unique(self.zaid_MT[:,1])
         num_col=(len(unique_MT)+1)*len(unique_MT)/2.
-        print(num_col,)
-        colors = distinctipy.get_colors( int(num_col),rng=42)#plt.cm.tab20b(np.linspace(0, 1, len(unique_rxpairs_col)-1))  # Use 'tab20' colormap for distinct colors
-        k=0
+        #associate a unique color to each reaction
+        colors = distinctipy.get_colors( int(num_col),rng=42)#  
+        
+        #for each unique MT reaction pair associate a color
         for j in unique_MT:
             for i in unique_MT:
                 if i!=j:
@@ -1385,24 +1497,19 @@ class Sensitivity(MCFR):
                 else:
                     color_map[j]=colors[k]
                     k+=1
-        print(color_map)
-        #unique_rxpairs=np.array(unique_rxpairs)
-        #unique_rxpairs=np.unique([s.split()[1] for s in ranking_rel[:,0]])
+ 
         isotopes=np.unique([s.split()[0] for s in ranking_rel[:,0]])
         
         #add an Other category for the readibility of the plot for reactions below a threshold
         #unique_rxpairs_col=np.append(unique_rxpairs,"Other")
         color_map["Other"]=[0.5,0.5,0.5]
+        
         #create color map linking a reaction to a color, add grey for Other category
-        #colors=np.vstack((colors,[0.5,0.5,0.5]))
-        #color_map = {reaction: color for reaction, color in zip(unique_rxpairs_col, colors)}
         text_color_map = {reaction:[0,0,0] if reaction=="Other" or np.array_equal(color_map[reaction],[0,1,0]) else distinctipy.get_text_color(color_map[reaction]) for i, reaction in enumerate(color_map.keys())}
         
         #remove the first row which is the total row from the plot, and find the index from which the isotopes are more than 100 times
         #smaller than the first isotopes
-        print(type(csv_data[:,-1]))
         csv_data=np.delete(csv_data,0,0)
-        print(csv_data[1,-1].n)
         ind0=  next((index for index, value in enumerate((csv_data[:,-1])) if (value.n == 0 or np.abs(value.n/np.max(np.abs(csv_data[:,-1])))<1e-2)), None)
         n_items=len(isotopes)
         if ind0 is None:
@@ -1410,7 +1517,7 @@ class Sensitivity(MCFR):
             
         #start of the plot
         plt.figure()
-        fig, ax = plt.subplots(figsize=(10, 6))
+        fig, ax = plt.subplots(figsize=(12, 6))
         # Bar width
         bar_width = 0.4
         threshold=20# threshold below which reaction pair is considered too small for plot added to the other box
@@ -1422,8 +1529,9 @@ class Sensitivity(MCFR):
             start = 0
             other_contribution = 0  # To accumulate small contributions to put in other
             #sort contributions for such that they appear in order in bar plot
-            sorted_contributions = sorted(ranking_rel_dic[nuc_name_to_zaid(csv_data[i,0])].items(), key=lambda x: np.float64(x[1]), reverse=True)
+            sorted_contributions = sorted(ranking_rel_dic[nuc_name_to_zaid(csv_data[i,0])[:-1]].items(), key=lambda x: np.float64(x[1]), reverse=True)
             #loop over the sorted reactions for that isotope
+            fontsize=12
             for reaction, contribution in sorted_contributions:
                 contribution=np.float64(contribution)
                 bar_height = np.float64(csv_data[i,5].n) * contribution/100.
@@ -1441,9 +1549,9 @@ class Sensitivity(MCFR):
                     # Annotate percentage
                     if not np.array_equal(text_color_map[reaction],[0,0,0]):
                         #if the font color should be white then set it to black and put a box around it
-                        ax.text(x_positions[i], start - bar_height / 2, f'{contribution:.1f}%', ha='center', va='center', color="black", fontsize=8,bbox=dict(facecolor="white",alpha=0.4))
+                        ax.text(x_positions[i], start - bar_height / 2, f'{contribution:.1f}%', ha='center', va='center', color="black", fontsize=fontsize,bbox=dict(facecolor="white",alpha=0.5))
                     else:
-                        ax.text(x_positions[i], start - bar_height / 2, f'{contribution:.1f}%', ha='center', va='center', color="black", fontsize=8)
+                        ax.text(x_positions[i], start - bar_height / 2, f'{contribution:.1f}%', ha='center', va='center', color="black", fontsize=fontsize)
                     reaction_listed.append(reaction)
             
             if other_contribution > 0:
@@ -1451,7 +1559,15 @@ class Sensitivity(MCFR):
                 ax.bar(x_positions[i], bar_height, bottom=start, color=color_map["Other"], width=bar_width, label='Other' if "Other" not in reaction_listed else "")
                 start += bar_height
                 # Annotate percentage for "Other"
-                ax.text(x_positions[i], start - bar_height / 2+20, f'{other_contribution:.1f}%', ha='center', va='center', color=text_color_map["Other"], fontsize=8)
+                push=0
+                alpha=0.5
+                if bar_height<10:
+                    push=15
+                    alpha=0
+                elif bar_height<30:
+                    push=25
+                    alpha=0
+                ax.text(x_positions[i], start - bar_height / 2+push, f'{other_contribution:.1f}%', ha='center', va='center', color=text_color_map["Other"], fontsize=fontsize,bbox=dict(facecolor="white",alpha=alpha))
                 reaction_listed.append("Other")
 
         # Set the x-axis labels
@@ -1462,15 +1578,16 @@ class Sensitivity(MCFR):
         ax.set_ylabel('Uncertainty (pcm)')
 
         # Add a legend
-        ax.legend(loc='upper right')#, bbox_to_anchor=(1.15, 1))
+        ax.legend(loc='upper right',ncol=2)#, bbox_to_anchor=(1.15, 1))
         #ax.grid()
 
         # Show the plot
 
-        plt.title(f"PSD corrected keff uncertainty for {self.reactor_type} at {temp_str}")
+        #plt.title(f"PSD corrected {self.sens_resp} uncertainty for {self.reactor_type} at {temp_str}")
         fig.tight_layout()
 
-        fig.savefig(os.path.join(self.folder_name,f"keff_unc_rx_{temp_str}.png"),dpi=400)
+        fig.savefig(os.path.join(self.folder_name,f"{plot_pre}{self.sens_resp}_unc_rx_{temp_str}.png"),dpi=400)
+        plt.close()
         # plt.figure()
         # plt.bar(csv_data[1:ind0,0],np.float64(csv_data[1:ind0,-2]),align="center")
         # if self.equi_comp:
@@ -1483,6 +1600,7 @@ class Sensitivity(MCFR):
         # plt.grid()
         # plt.tight_layout()
         # plt.savefig(os.path.join(self.folder_name,f"unc_keff_{temp_str}"))
+        return unc_tot_PSD,unc_tot
       
     def _var_decomp_rx(self):
 
@@ -1594,31 +1712,170 @@ class Sensitivity(MCFR):
 
         ranking=[]
         ranking_rel = []
+        csv_data=[]
         for abs_cov in cov_abs:
             # Flip back to original keys and values
             true_key = covar_dict_abs[str(abs_cov)]
             true_cov = covar_dict[true_key]
             ranking.append([true_key, (true_cov)])
-            ranking_rel.append([true_key, np.float64(true_cov)/sum[true_key.split()[0]]*100])
+            rel_cov=np.float64(true_cov)/sum[true_key.split()[0]]*100
+            ranking_rel.append([true_key, rel_cov])
+            if true_cov>=0:
+                csv_data.append([true_key,np.sqrt(true_cov)*1e5,rel_cov])
+            else:
+                csv_data.append([true_key,-np.sqrt(-true_cov)*1e5,"-"])
+        
         sqrt_dict = {key: np.sqrt(value)*1e5 for key, value in sum.items()}
-        print(ranking_rel,fro,note,sqrt_dict)
+        if self.equi_comp:
+            temp_str="equilibrium"
+        else:
+            temp_str="initial"
+        temp=os.path.join(self.folder_name,f"{self.sens_resp}_PSD_rx_uncertainty_{temp_str}.csv")
+        csv_write=open(temp, "w", newline='') 
+        writer = csv.writer(csv_write)
+        writer.writerow(["Nuc_RX","Uncertainty [pcm]", "Relative contribution to each isotopes total variance [%]"])
+        #calculate the relative contribution to the total uncertainty (with respect to the variance and not uncertainty)
+        csv_data=np.array(csv_data)
+        #sort in decreasing order with respect to relative contribution
+        #csv_data = csv_data[np.argsort(csv_data[:, -1])[::-1],:]
+
+        #save into csv file
+        writer.writerows(csv_data)
+        csv_write.close()
+        #print(ranking_rel,fro,note,sqrt_dict)
         #ranking_rel={item[0]: item[1] for item in ranking_rel}
         return np.array(ranking_rel)
 
-#class Pert_sens(Sensitivity)
-                
+class Pert_sens(Sensitivity):
+    """This was the attempt to conduct the sensitivity analysis using Equivalent GPT to generate sensitivity vectors for any parameter
+    such as doppler or void reactiviy coefficent. However failed due very strong uncertainty no time to repair this might have bugs.
+
+    Args:
+        Sensitivity (_type_): _description_
+    """
+    def __init__(self,dT,drho,sens_iso="all",sens_MT="all_MT",sens_resp="keff",mflow_in=None,mflow_out=None,equi_comp=False,e_cl=0.75,e_U_stock=0.1975,lib_cl="ENDF8",lib_all="ENDF8",pop=1e5,active=500,inactive=50,reactor_type="MCFR_C",get_flux=False,prefix="",BU_years=100):
+        #base sensitivity of unperturbed state
+        self.config_base=Sensitivity(sens_iso,sens_MT,sens_resp,mflow_in,mflow_out,equi_comp,e_cl,e_U_stock,lib_cl,lib_all,pop,active,inactive,reactor_type,get_flux,prefix, BU_years)
+        if not os.path.exists(self.config_base.out_path()+"_sens0.m") :
+            raise ImportError(f"Make sure you ran {self.config_base.out_path()} before being able to look at the perturbation")
+
+        self.config_T=copy.deepcopy(self.config_base)
+        self.config_D=copy.deepcopy(self.config_base)
+        
+        self.dT=dT
+        self.drho=drho
+        
+        #creating Temperature perturbation
+        self.config_T.file_name="Tpert_"+self.config_T.file_name
+        self.config_T.temp_salt=self.config_T.temp_salt+self.dT
+        self.config_T.gen_serpent()
+        
+        self.config_D.file_name="Dpert_"+self.config_D.file_name
+        self.config_D.rho=np.array([self.config_D.param["rho_refl"],salt_density(self.config_D.temp_salt)+self.drho,self.config_D.param["rho_clad"]])
+        #here we just want to look at the change in salt density instantously and not in the reflecter mixed with fuel?
+        #sens_D.gen_comp()
+        self.config_D.gen_serpent()
+        self.config_list=[self.config_base,self.config_T,self.config_D]
+    
+    def gen_exec_all(self,time=30,nodes=1, partition="savio3_bigmem"):
+        sss_str,variables=self.config_T.get_exec(time,nodes,partition)
+        self.exec_name=f"execute_{self.config_base.lib_cl}_{len(self.config_base.sens_iso)}_pertTD.sub"
+        _,var2=self.config_D.get_exec(time,nodes,partition)
+        #combining the two serpent command into a single execute
+        variables[-1]=array_txt([[variables[-1]],[var2[-1]]])
+        self.o_path="pertTD_"+self.config_base.folder_name+".o"
+        variables[0]=self.o_path[:-2]
+        self.config_D.write_to_file(sss_str,variables,self.config_base.template_path,self.exec_name)
+    
+    def run_all(self,time=30,nodes=1,partition="savio3_bigmem"):
+        self.config_T.wipe()
+        self.config_D.wipe()
+        self.gen_exec_all(time,nodes,partition)
+        if os.path.exists(self.o_path):
+            os.remove(self.o_path) 
+        print(f"Running the perturbation in Temperature of {self.dT} K and in density {self.drho} g/cm^3 ") 
+        os.system(f"cd {self.config_base.folder_name}; sbatch {self.exec_name} ")
+        self.config_D.simu_wait(self.o_path,number=2)
+        print("finished the simulation")
+        
+    def extract_sens_m_all(self,zais="all",perts=["2","4","102","103","107","16","18","452"],plot_dir="",do_plot=False):
+        def sens_EGPT(k1,k2,sens1,sens2):
+            #k1 is the the unperturbed state
+            for i in range(len(sens1)):
+                k=0
+                for j in range(len(sens1[i])):
+                    if np.abs(unp.nominal_values(sens1[i,j]))*0.5<=unp.std_devs(sens1[i,j]):
+                        k+=1
+                        sens1[i,j]=sens1[i,j]*0
+                        sens2[i,j]=sens2[i,j]*0
+                print(k,self.config_base.zaid_MT[i])
+            lam1=1/k1
+            lam2=1/k2
+            return (sens2*lam2-sens1*lam1)/(lam1-lam2)
+        
+        def get_same_sens():
+            matching_indices = []
+
+            # Loop through each row in the first matrix
+            for i in range(len(self.config_base.zaid_MT)):
+                if self.config_base.zaid_MT[i] in self.config_T.zaid_MT:
+                    matching_indices.append(i)
+            
+
+            selected_rows = [self.config_base.sens[i] for i in matching_indices]
+            return selected_rows
+        
+        k=[]
+        #the Sensitivity class instance in order base mode, pert T and pert density
+        for sens in self.config_list:
+            sens.extract_sens_m(zais,perts,plot_dir,do_plot)
+            temp=sens.extract_res_m(["absKeff"])[0]
+            k.append(unp.uarray(temp[0],temp[1]*temp[0]))
+        alpha_dT= (k[1]-k[0])/self.dT
+        alpha_drho= (k[2]-k[0])/self.drho
+
+        T_sens=sens_EGPT(k[0],k[1],unp.uarray(self.config_base.sens,self.config_base.sens_s),unp.uarray(self.config_T.sens,self.config_T.sens_s))
+        D_sens=sens_EGPT(k[0],k[2],unp.uarray(self.config_base.sens,self.config_base.sens_s),unp.uarray(self.config_D.sens,self.config_D.sens_s))
+        for j,zaid_MT in enumerate(self.config_base.zaid_MT):
+                pass
+                #print(self.config_base.zaid_MT_intEsens[j],self.config_T.zaid_MT_intEsens[j])
+        self.config_T.sens,self.config_T.sens_s=unp.nominal_values(T_sens),unp.std_devs(T_sens)
+        self.config_D.sens,self.config_D.sens_s=unp.nominal_values(D_sens),unp.std_devs(D_sens)
+
+        print("Running the covariance sensitivity error propagation for T")
+        unc_T_PSD,unc_T=self.config_T.error_prop(plot_pre="pertT")
+        print("Running the covariance sensitivity error propagation for D")
+        unc_D_PSD,unc_D=self.config_D.error_prop(plot_pre="pertD")
+        print(f"Doppler reactivity feedback {alpha_dT*1e5} pcm/K, density reactivity feedback {alpha_drho*1e5} pcm/(g/cm^3)")
+        print(unc_T_PSD/self.dT*1e5,-unc_D_PSD/self.drho*1e5)
+
+            
 ######################################################################################################
 
 #                           Classes of class instances                                              #
 
 ######################################################################################################                 
+# These classes are useful when you want multiple instance of the same class Static or Burnup, for Static this is done in 
+#order to the critical enrichment, and for Burnup it is done to find the correct mflow.
+   
+   
     
 class MCFRs():
     def __init__(self,MCFR=None):
+        """This abstract class take instances of MCFR as input in a list 
+
+        Args:
+            MCFR (list, optional): list of MCFR instance. Defaults to None.
+        """
         self.list_MCFR=MCFR if MCFR is not None else []
+        
+        #if it a single instance and not in a list turn it into a list
         if not isinstance(self.list_MCFR,list):
             self.list_MCFR=[MCFR]
         self.exec_name=None
+        
+        #if the list is not empty it will create a common repository for all the elements of the list, and will check that the
+        #same library is used amongst the different instance. 
         if MCFR is not None:
             self.folder_name=self.list_MCFR[0].folder_name
             self.check_same_lib()
@@ -1628,6 +1885,11 @@ class MCFRs():
             self.template_path=self.list_MCFR[0].template_path
                     
     def add_MCFR(self,new_MCFR):
+        """adds a new MCFR to the list
+
+        Args:
+            new_MCFR (MCFR): MCFR to add to list
+        """
         self.list_MCFR.append(new_MCFR)
         self.__init__(self.list_MCFR)
 
@@ -1643,12 +1905,12 @@ class MCFRs():
                     file_path = os.path.join(i.folder_name, file)
                     os.remove(file_path)
                                         
-    def run_all(self,nodes=1,partition="savio3",run_msg="running"):
+    def run_all(self,nodes=1,partition="savio3",time=10,run_msg="running"):
         """Run all the MCFR instances in the class using a single executing file
         """
         
         self.wipe()
-        self.gen_exec_all(nodes,partition)
+        self.gen_exec_all(time,nodes,partition)
         # os.system("nohup")
         o_path=os.path.join(self.folder_name,self.folder_name+".o")
         if os.path.exists(o_path):
@@ -1662,6 +1924,16 @@ class MCFRs():
         print("finished the simulation")
         
     def gen_exec_all(self,time,nodes,partition):
+        """Generate the execute file which will run all the simulations in one run
+
+        Args:
+            time (_type_): _description_
+            nodes (_type_): _description_
+            partition (_type_): _description_
+
+        Returns:
+            _type_: _description_
+        """
         sss_str,variables=self.list_MCFR[0].get_exec(time,nodes,partition)
         variables[0]=self.folder_name #change the .o path 
         cmd=[]
@@ -1683,25 +1955,30 @@ class MCFRs():
  
 
 class Statics(MCFRs):
+    """This class inherets from MCFRs, so the function descriptions are the same as before, the changing variable for this is the Cl enrichment
+    """
     def __init__(self,Statics=None):
         super().__init__(Statics)
         self.e_cl=self.get_list_cl_e()
 
     def get_list_cl_e(self):
+        """generates a list of Cl enrichment values for ease of use
+
+        """
         e_cl=[]
         for i in self.list_MCFR:
             e_cl.append(i.e_cl)
         return np.array(e_cl) 
     
-    def gen_exec_all(self, nodes=1, partition="Savio3"):
+    def gen_exec_all(self,time, nodes=1, partition="Savio3"):
         time=0.5*self.len
         sss_str,variables= super().gen_exec_all(time, nodes, partition)
         self.exec_name=f"execute_{self.lib_cl}_{self.len}.sub"
         self.list_MCFR[0].write_to_file(sss_str,variables,self.template_path,self.exec_name)
         
-    def run_all(self, nodes=1, partition="savio3"):
+    def run_all(self, nodes=1, partition="savio3",time=10):
         run_msg=f"Starting static simulation for lib: {self.lib_cl}, for All-lib {self.lib_all} with {*self.e_cl,} different enrichments"
-        super().run_all(nodes, partition,run_msg=run_msg)
+        super().run_all(nodes, partition,time,run_msg=run_msg)
 
     def extract_plot(self,variable, plot=True):
         """extract variable from the res.m out file, 
@@ -1722,8 +1999,7 @@ class Statics(MCFRs):
         for i in self.list_MCFR:
             temp=i.extract_res_m(variable)
             var.append(temp)
-        var=np.array(var)
-
+        var=np.array(var)[:,0]
         if plot:
             plt.figure()
             plt.errorbar(self.e_cl*100,var[:,0],yerr=var[:,1],fmt="o")
@@ -1739,17 +2015,23 @@ class Statics(MCFRs):
             plt.legend()
             plt.grid()
             plt.title(f"{variable} in function of Cl enrichment, Cl35-{self.lib_cl}.0, All-{self.lib_all}.0")
-            plt.savefig(f"{plot_path}/{variable}_e_{self.lib_cl}.png")
+            plt.savefig(f"{plot_path}/{variable}_e_{self.lib_cl}.png",dpi=400)
             plt.close()
         return var
   
     
 class Depletions(MCFRs):
+    """Inherits from MCFRs, same as Statics however here the changing variable is the in mass flow (mflow_in) and by consequence the mflow_out
+
+    """
     def __init__(self,Depletions=None):
         super().__init__(Depletions)
         self.mflow_list=self.get_list_mflow()
         
     def get_list_mflow(self):
+        """returns the list of mflow
+
+        """
         mflow=[]
         for i in self.list_MCFR:
             mflow.append(i.mflow_in)
@@ -1766,6 +2048,13 @@ class Depletions(MCFRs):
         super().run_all(nodes, partition,run_msg=run_msg)
         
     def extract_dep_m_all(self,isotopes,var_name,do_plot=True,logy=True):
+        """extract the depletion information for each element in the mflow list and puts them together in a multiple dimensional array 
+
+        Args:
+            same as extract_dep_m
+
+
+        """
         units=self.list_MCFR[0].units
         if var_name not in units:
             raise ValueError(f"Make sure the variable is part of the following {units.keys()}")
@@ -1779,27 +2068,20 @@ class Depletions(MCFRs):
             temp,Bu=i.extract_dep_m(isotopes,var_name,plot_dir,do_plot=do_plot,logy=logy)
             var.append(temp)
         var=np.array(var)
-        if False:
-            if do_plot:
-                if len(isotopes)==1:
-                    fig=plt.figure()
-                    ax = fig.add_subplot(111)
-                    enri_mesh,Bu_mesh=np.meshgrid(self.e_cl,Bu)
-                    z_flat=var[:,0,0,:]#.flatten()
-                    vmin=np.min(z_flat)
-                    vmax=np.max(z_flat)
-                    levels=15
-                    surf=plt.contourf(Bu_mesh/365,enri_mesh*100,z_flat.T,levels=levels,norm=Normalize(vmin=vmin,vmax=vmax))
-                    ax.set_xlabel('Burnup years')
-                    ax.set_ylabel('Cl-37 Enrichment [w%]')
-                    ax.grid()
-                    cbar=plt.colorbar(surf,ticks=np.linspace(vmin, vmax, levels),label=f"{var_name} [{unit}]")
-                    ax.set_title(f"{var_name}(BU,Cl_e) for {*isotopes,} using Cl35-{self.lib_cl}.0, All-{self.lib_all}.0",fontsize=10)
-                    plt.savefig(f"{plot_path}/Bu_ecl_{var_name}.png")
-                    plt.close()
+
         return  var, Bu
 
     def extract_res_m_all(self,var_names,do_plot=True):
+        """Simularly to extract_dep_m_all takes all the res from each simulation and puts them into a single array. However a plot can also be done combining all these 
+        values together
+
+        Args:
+            var_names (_type_): name of variable to extract from res file.
+            do_plot (bool, optional): whether to plot. Defaults to True.
+
+        Returns:
+            array: returns the array with all the values for each simulation, in the order of mflow list.
+        """
         var=[]
         if not isinstance(var_names,list):
             var_names=[var_names]
@@ -1832,33 +2114,3 @@ class Depletions(MCFRs):
             plt.savefig(f"{plot_path}/Bu_mflow_{*var_names,}.png")
         return var, Bu
 
-
-class Sens_pair(MCFRs):
-    """create a pair or initial and equilibrium composition Sensitivity, 
-    """
-    def __init__(self,mflow_in,sens_iso="all",sens_MT="all",mflow_out=None,sens_resp="keff",e_cl=0.75, e_U_stock=0.1975,lib_cl="ENDF8",lib_all="ENDF8",pop=1e5,active=500,inactive=25,reactor_type="MCFR_C",get_flux=False,prefix="",BU_years=60):
-        self.Initial=Sensitivity(sens_iso,sens_MT,sens_resp,None,None,False,e_cl,e_U_stock,lib_cl,lib_all,pop,active,inactive,reactor_type,get_flux,prefix,BU_years)
-        self.Equi=Sensitivity(sens_iso,sens_MT,sens_resp,mflow_in,mflow_out,True,e_cl,e_U_stock,lib_cl,lib_all,pop,active,inactive,reactor_type,get_flux,prefix,BU_years)
-        super().__init__([self.Initial,self.Equi])
-        
-    def gen_exec_all(self, nodes, partition):
-        time=2*self.len
-        sss_str,variables= super().gen_exec_all(time, nodes, partition)
-        self.exec_name=f"execute_pair_{self.lib_cl}_{self.len}.sub"
-        self.list_MCFR[0].write_to_file(sss_str,variables,self.template_path,self.exec_name)
-        
-    def run_all(self, nodes=1, partition="savio3_bigmem"):
-        run_msg=f"Starting sensitivity simulation for lib: {self.lib_cl}, for All-lib {self.lib_all} with initial and equilibirum composition"
-        super().run_all(nodes, partition,run_msg=run_msg)
-    
-    def extract_sens_m_all(self,zais,perts,zais_equi=None,perts_equi=None,do_plot=True):
-        var=[]
-        plot_dir="sensitivity_plots"
-        if zais_equi is None:
-            zais_equi=zais
-            perts_equi=perts
-
-        k,k_s,E,du=self.Initial.extract_sens_m(zais,perts,plot_dir=plot_dir,do_plot=do_plot)
-        k_equi,k_sequi,_,_=self.Equi.extract_sens_m(zais_equi,perts_equi,plot_dir=plot_dir,do_plot=do_plot)
-
-        return k,k_s,k_equi,k_sequi,E,du

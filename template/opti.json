@@ -15,19 +15,21 @@
         "path_cov": "path_to_covariance_file_ENDF8"
         }
   },
-  "ENDF8": {
+  "ENDF8": { 
     "MCFR_C":{
-      "e_cl": 0.7486,
+      "old_value_e_cl":0.7486,
+      "e_cl": 0.75,
       "mflow_in": 3e-10,
       "mflow_out":2.918e-10,
       "BU_years":400,
       "path_cov": "path_to_covariance_file_ENDF8"
       },
     "MCFR_D":{
-        "e_cl": 0.3354,
-        "mflow_in": 1e-10,
-        "mflow_out":9.178e-11,
-        "BU_years":400,
+        "old_value_e_cl":0.3354,
+        "e_cl": 0.75,
+        "mflow_in": 3.05e-9,
+        "mflow_out":3.0331e-09,
+        "BU_years":100,
         "path_cov": "path_to_covariance_file_ENDF8"
       }
   }

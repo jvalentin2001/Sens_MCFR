@@ -1,13 +1,14 @@
 import numpy as np
 import  matplotlib.pyplot as plt
-import warnings, os
+import warnings, os, matplotlib,scipy
 import scipy.sparse as sparse
 import scipy.sparse.linalg as sla
 from scipy.linalg import lapack
-import statsmodels.stats.correlation_tools as corr 
-from scipy.sparse import csc_matrix
+#import statsmodels.stats.correlation_tools as corr 
+from scipy.sparse import csc_matrix,csr_matrix
 from scipy.sparse.linalg import svds
 from uncertainties import unumpy as unp
+from math import log10, floor
 
 
 
@@ -26,6 +27,39 @@ partitions = {
     'savio4_htc': {'nodes': 108, 'cores_per_node': 56},
     'savio4_gpu': {'nodes': 26, 'cores_per_node': 32}
 }
+
+def plot_param():
+    matplotlib.rcParams.update({
+    'font.size': 12,  # Default font size
+    #'text.usetex': True,  # Use LaTeX for all text rendering
+    'font.family': 'serif',  # Use serif fonts
+    'font.serif': ['STIXGeneral'],  # Use LaTeX's default serif font
+    'axes.labelsize': 14,  # Axis label font size
+    'xtick.labelsize': 12,  # X-axis tick label font size
+    'ytick.labelsize': 12,  # Y-axis tick label font size
+    'legend.fontsize': 12,  # Legend font size
+    'figure.titlesize': 12,  # Figure title font size
+    'savefig.dpi': 400,  # Default DPI for saving figures
+    "legend.fancybox": True,
+    "legend.shadow": False
+    })
+    
+def plot_param_dual():
+    matplotlib.rcParams.update({
+    'font.size': 20,  # Default font size
+    #'text.usetex': True,  # Use LaTeX for all text rendering
+    'font.family': 'serif',  # Use serif fonts
+    'font.serif': ['STIXGeneral'],  # Use LaTeX's default serif font
+    'axes.labelsize': 20,  # Axis label font size
+    'xtick.labelsize': 17,  # X-axis tick label font size
+    'ytick.labelsize': 17,  # Y-axis tick label font size
+    'legend.fontsize': 17,  # Legend font size
+    'figure.titlesize': 17,  # Figure title font size
+    'savefig.dpi': 400,  # Default DPI for saving figures
+    "legend.fancybox": True,
+    "legend.shadow": False
+    })
+
 
 
 
@@ -60,8 +94,8 @@ def zai_to_nuc_name(zaid):
             A = str(int(zaid[1:4]))  # Mass number
             if A=="0":
                 A="nat"
-            if zaid[-1]!=0 or zaid!=0 == 1:
-                warnings.warn("Make sure you are using the zaid format ending in 0 for ground state")
+            if zaid[-1]!=0:
+                warnings.warn(f"Make sure {zaid} you are using the zaid format ending in 0 for ground state")
             # ID = zai[4:5]           # Isomeric state ID
 
         # Read Z, A, I for double-digit Z values
@@ -98,27 +132,40 @@ def zai_to_nuc_name(zaid):
 
 def nuc_name_to_zaid(nuc):
     "nuc name in Cl-35 format"
-    Z,A=nuc.split("-") 
-    ZDict= {'H': 1, 'He': 2, 'Li': 3, 'Be': 4, 'B': 5, 'C': 6, 'N': 7, 'O': 8, 'F': 9, 'Ne': 10,
-    'Na': 11, 'Mg': 12, 'Al': 13, 'Si': 14, 'P': 15, 'S': 16, 'Cl': 17, 'Ar': 18, 'K': 19,
-    'Ca': 20, 'Sc': 21, 'Ti': 22, 'V': 23, 'Cr': 24, 'Mn': 25, 'Fe': 26, 'Co': 27, 'Ni': 28,
-    'Cu': 29, 'Zn': 30, 'Ga': 31, 'Ge': 32, 'As': 33, 'Se': 34, 'Br': 35, 'Kr': 36, 'Rb': 37,
-    'Sr': 38, 'Y': 39, 'Zr': 40, 'Nb': 41, 'Mo': 42, 'Tc': 43, 'Ru': 44, 'Rh': 45, 'Pd': 46,
-    'Ag': 47, 'Cd': 48, 'In': 49, 'Sn': 50, 'Sb': 51, 'Te': 52, 'I': 53, 'Xe': 54, 'Cs': 55,
-    'Ba': 56, 'La': 57, 'Ce': 58, 'Pr': 59, 'Nd': 60, 'Pm': 61, 'Sm': 62, 'Eu': 63, 'Gd': 64,
-    'Tb': 65, 'Dy': 66, 'Ho': 67, 'Er': 68, 'Tm': 69, 'Yb': 70, 'Lu': 71, 'Hf': 72, 'Ta': 73,
-    'W': 74, 'Re': 75, 'Os': 76, 'Ir': 77, 'Pt': 78, 'Au': 79, 'Hg': 80, 'Tl': 81, 'Pb': 82,
-    'Bi': 83, 'Po': 84, 'At': 85, 'Rn': 86, 'Fr': 87, 'Ra': 88, 'Ac': 89, 'Th': 90, 'Pa': 91,
-    'U': 92, 'Np': 93, 'Pu': 94, 'Am': 95, 'Cm': 96, 'Bk': 97, 'Cf': 98, 'Es': 99}
-    mass_number = int(A)
+    strinput=False
+    if isinstance(nuc, str):
+        nuc=[nuc]
+        strinput=True
     
-    # Get the atomic number using the reversed dictionary
-    atomic_number = ZDict[Z]
+    zai_list=[]
+    for i in nuc:
+        Z,A=i.split("-") 
+        ZDict= {'H': 1, 'He': 2, 'Li': 3, 'Be': 4, 'B': 5, 'C': 6, 'N': 7, 'O': 8, 'F': 9, 'Ne': 10,
+        'Na': 11, 'Mg': 12, 'Al': 13, 'Si': 14, 'P': 15, 'S': 16, 'Cl': 17, 'Ar': 18, 'K': 19,
+        'Ca': 20, 'Sc': 21, 'Ti': 22, 'V': 23, 'Cr': 24, 'Mn': 25, 'Fe': 26, 'Co': 27, 'Ni': 28,
+        'Cu': 29, 'Zn': 30, 'Ga': 31, 'Ge': 32, 'As': 33, 'Se': 34, 'Br': 35, 'Kr': 36, 'Rb': 37,
+        'Sr': 38, 'Y': 39, 'Zr': 40, 'Nb': 41, 'Mo': 42, 'Tc': 43, 'Ru': 44, 'Rh': 45, 'Pd': 46,
+        'Ag': 47, 'Cd': 48, 'In': 49, 'Sn': 50, 'Sb': 51, 'Te': 52, 'I': 53, 'Xe': 54, 'Cs': 55,
+        'Ba': 56, 'La': 57, 'Ce': 58, 'Pr': 59, 'Nd': 60, 'Pm': 61, 'Sm': 62, 'Eu': 63, 'Gd': 64,
+        'Tb': 65, 'Dy': 66, 'Ho': 67, 'Er': 68, 'Tm': 69, 'Yb': 70, 'Lu': 71, 'Hf': 72, 'Ta': 73,
+        'W': 74, 'Re': 75, 'Os': 76, 'Ir': 77, 'Pt': 78, 'Au': 79, 'Hg': 80, 'Tl': 81, 'Pb': 82,
+        'Bi': 83, 'Po': 84, 'At': 85, 'Rn': 86, 'Fr': 87, 'Ra': 88, 'Ac': 89, 'Th': 90, 'Pa': 91,
+        'U': 92, 'Np': 93, 'Pu': 94, 'Am': 95, 'Cm': 96, 'Bk': 97, 'Cf': 98, 'Es': 99}
+        mass_number = int(A)
+        
+        # Get the atomic number using the reversed dictionary
+        atomic_number = ZDict[Z]
+        
+        # Form the ZAI number
+        if atomic_number<10:
+            zai_number=f"{atomic_number:01d}{mass_number:03d}0"
+        else:
+            zai_number = f"{atomic_number:02d}{mass_number:03d}0"
+        zai_list.append(zai_number)
+    if strinput:
+        return zai_number
     
-    # Form the ZAI number
-    zai_number = f"{atomic_number:02d}{mass_number:03d}"
-    
-    return zai_number
+    return np.array(zai_list)
 
 
 def MTtoRX(MFMT):
@@ -127,11 +174,11 @@ def MTtoRX(MFMT):
     '''
 
     # Dictionary mapping MFx/MTx to reaction string
-    MFMT_Dict = {"1": "total", "2": "elastic",
-                 "4": "inelastic", "16": "n,2n", "18": "fission","28":"n,np","51":"inelastic (1st)","52":"inelastic (2nd)","53":"inelastic (3rd)","54":"inelastic (4th)","55":"inelastic (5th)",
-                 "91": "inelastic (cont)","103": "n,p", "102": "n,gamma",
-                 "104": "n,d", "105": "n,t", "106": "n,3he",
-                 "107": "n,alpha","111":"n,2p", "182": "chi delayed", "452":"nubar total","455":"nubar delayed","456": "nubar prompt","1018": "chi total"}
+    MFMT_Dict = {"1": "Total", "2": "Elastic",
+                 "4": "Inelastic", "16": "(n,2n)", "18": "Fission","28":"(n,np)","51":"Inelastic (1st)","52":"Inelastic (2nd)","53":"inelastic (3rd)","54":"inelastic (4th)","55":"inelastic (5th)",
+                 "91": "Inelastic (cont)","103": "(n,p)", "102": "(n,$\\gamma$)",
+                 "104": "(n,d)", "105": "(n,t)", "106": "(n,3he)",
+                 "107": "(n,$\\alpha$)","111":"(n,2p)", "182": "chi delayed", "452":"$\\bar{\\nu}$ total","455":"nubar delayed","456": "nubar prompt","1018": "$\\chi$ total"}
 
     ret_to_str=False
     # Check if MFx/MTx is in the dictionary
@@ -150,6 +197,7 @@ def MTtoRX(MFMT):
     if ret_to_str:
         return list_RX[0]
     return list_RX
+
 def sssmtlist_to_RXlist(list_MT):
     """Convert a list from serpent output in MT format (i.e. mt n xs) into RX
 
@@ -386,10 +434,10 @@ def nearest_psd(matrix):
 def psd_closeness(matrix):
     """Calculate how close the matrix is to being PSD."""
     # Ensure the matrix is symmetric
-    sym_matrix = (matrix + matrix.T) / 2
+    #sym_matrix = (matrix + matrix.T) / 2
     
     # Perform eigenvalue decomposition
-    eigenvalues = np.linalg.eigvalsh(sym_matrix)
+    eigenvalues= np.linalg.eigvalsh(matrix,)
     
     # Identify negative eigenvalues
     negative_eigenvalues = eigenvalues[eigenvalues < 0]
@@ -443,14 +491,14 @@ def deflate_sparse_matrix_eigen(sparse_matrix):
             res_norm=np.linalg.norm(residual[i]) #norm 2
             bound=diff+res_norm
             g_list=[]
-            for j,rq in enumerate(rayleigh_quotients):
-                if i==0 and j==0 or j==1:
-                   g_list.append(np.abs(rayleigh_quotients[i]-rq)-res_norm)
-                if j==i-1 or j==i+1:
-                    g_list.append(np.abs(rayleigh_quotients[i]-rq)-res_norm)
-            g=np.min(g_list)
-            tight_bound=diff+res_norm**2/g
-            bound=np.min([bound,tight_bound])
+            #for j,rq in enumerate(rayleigh_quotients):
+                #if i==0 and j==0 or j==1:
+                #   g_list.append(np.abs(rayleigh_quotients[i]-rq)-res_norm)
+                #if j==i-1 or j==i+1:
+                #    g_list.append(np.abs(rayleigh_quotients[i]-rq)-res_norm)
+            #g=np.min(g_list)
+            #tight_bound=diff+res_norm**2/g
+            bound=np.min([bound,bound])
             if not eigenvalues[i]<0:
                 k+=1
             if not v<-bound:
@@ -466,7 +514,7 @@ def deflate_sparse_matrix_eigen(sparse_matrix):
     # Reconstruct the deflated matrix
     deflated_matrix =sparse_matrix- mat_mul+H
     
-    return csc_matrix(deflated_matrix).toarray()
+    return deflated_matrix
 
 def get_unc_covar(mat,S_nuc):
     """propagate uncertainty through a matrix, but also propagate uncertainty from statistical origin in serpent
@@ -493,3 +541,13 @@ def isPD(matrix):
         return True
     except np.linalg.LinAlgError:
         return False
+    
+def salt_density(temp_salt):
+    """generate density based on A-B*T(K) equation given in MCFR design
+    Returns:
+        float: density [g/cm^3]
+    """
+    rho=(4.2126e3-1.0686*np.array(temp_salt))*1e-3
+    return round(rho, 3-int(np.floor(np.log10(np.abs(rho))))-1)
+
+

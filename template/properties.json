@@ -49,7 +49,10 @@
     }
   },
   "general_prop":{
-    
+    "path_TENDL":"c:/Users/jbval/PDM/02_cov/cov_npy/TENDL2023-ANL_33",
+    "path_ENDF8":"c:/Users/jbval/PDM/02_cov/cov_npy/ENDF8-ANL_33",
+    "path_LANL":"c:/Users/jbval/PDM/02_cov/cov_npy/LANL-ANL_33",
+    "NEG":33
   }
 
 

@@ -83,7 +83,6 @@ set gcu -1
 
 
 set pop Replacepop
-set nbuf 2000
 
 % --- Geometry and mesh plots:
 

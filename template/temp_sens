@@ -40,10 +40,13 @@ sens pert matlist total
 % --- Perturb cross sections separately for each sum reaction mode (fission, capture etc.)
 
 sens pert xs Replacemtlist %all % mtlist 102 103 18 %sens pert xs mtlist 102 103
+sens pert nubar 1
+sens pert chi 1
 
 % --- Score sensitivity results directly to a matrix for each particle
 %     Assume 0.2 matrices needed per generation per particle
+set nbuf 2000
 
-sens opt direct 0.2
+%sens opt direct 0.2
 
 ReplaceBU
