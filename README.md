@@ -9,7 +9,7 @@ All the code is thoroughly commented, and with the example file and the master t
 
 ## Authors
 
-- [@jvalentin2001](https://www.github.com/octokatherine)
+- [@jvalentin2001](https://www.github.com/jvalentin2001)
 
 
 ## License
